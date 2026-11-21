@@ -1,0 +1,6 @@
+{
+  "name": "DocScan Browser OCR",
+  "description": "Modular client-side passport and ID card OCR scanner powered by Tesseract.js, ICAO 9303 MRZ parsing, and visual inspection zone extraction.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
