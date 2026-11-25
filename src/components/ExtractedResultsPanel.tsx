@@ -192,6 +192,27 @@ export const ExtractedResultsPanel: React.FC<ExtractedResultsPanelProps> = ({
               <span className="font-mono tabular-nums">{result.confidence}% OCR confidence</span>
               <span aria-hidden="true">·</span>
               <span className="font-mono tabular-nums">{result.processingTimeMs} ms</span>
+              {result.mrzModel && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span className="font-mono text-slate-700">
+                    MRZ: {result.mrzModel === 'ocrb' ? 'OCR-B' : 'Standard'}
+                  </span>
+                </>
+              )}
+              {result.quality && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span
+                    title={result.quality.guidance}
+                    className={`font-mono tabular-nums ${
+                      result.quality.passed ? 'text-emerald-700' : 'text-amber-700'
+                    }`}
+                  >
+                    Quality {result.quality.overallScore}/100
+                  </span>
+                </>
+              )}
               {result.perspective?.applied && (
                 <>
                   <span aria-hidden="true">·</span>
@@ -590,7 +611,11 @@ export const ExtractedResultsPanel: React.FC<ExtractedResultsPanelProps> = ({
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <h3 className="text-xs font-semibold text-slate-600">
-                      Detected Machine Readable Zone ({result.mrz.format})
+                      Detected Machine Readable Zone ({result.mrz.format}
+                      {result.mrzModel
+                        ? ` · ${result.mrzModel === 'ocrb' ? 'OCR-B' : 'Standard'}`
+                        : ''}
+                      )
                     </h3>
                     <button
                       type="button"

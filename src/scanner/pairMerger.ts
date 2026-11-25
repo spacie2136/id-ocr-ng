@@ -3,6 +3,7 @@ import type {
   DocumentType,
   ExtractedIdentity,
   FieldSource,
+  ImageQualityReport,
   MrzParsedData,
   SideConsistencyConflict,
   MergedDocumentResult,
@@ -155,6 +156,36 @@ function resolveDocumentType(front: ExtractedIdentity, back: ExtractedIdentity):
   if (front.documentType !== 'unknown') return front.documentType;
   if (back.documentType !== 'unknown') return back.documentType;
   return 'unknown';
+}
+
+function mergeQualityReports(
+  fq?: ImageQualityReport,
+  bq?: ImageQualityReport
+): ImageQualityReport | undefined {
+  if (!fq && !bq) return undefined;
+  if (fq && !bq) return fq;
+  if (!fq && bq) return bq;
+  const a = fq!;
+  const b = bq!;
+  const issues = Array.from(new Set([...a.issues, ...b.issues]));
+  const passed = a.passed && b.passed;
+  return {
+    passed,
+    overallScore: Math.min(a.overallScore, b.overallScore),
+    sharpnessScore: Math.min(a.sharpnessScore, b.sharpnessScore),
+    isSharp: a.isSharp && b.isSharp,
+    glareRatio: Math.max(a.glareRatio, b.glareRatio),
+    hasGlare: a.hasGlare || b.hasGlare,
+    meanBrightness: Math.round((a.meanBrightness + b.meanBrightness) / 2),
+    exposureStatus: a.exposureStatus !== 'ok' ? a.exposureStatus : b.exposureStatus,
+    documentDetected: a.documentDetected && b.documentDetected,
+    detectedCorners: b.detectedCorners ?? a.detectedCorners,
+    stabilityScore: Math.min(a.stabilityScore, b.stabilityScore),
+    isStable: a.isStable && b.isStable,
+    motionDelta: Math.max(a.motionDelta, b.motionDelta),
+    issues,
+    guidance: passed ? a.guidance : !a.passed ? a.guidance : b.guidance,
+  };
 }
 
 /**
@@ -592,6 +623,10 @@ export function mergeDocumentSides(
     eyeColor,
     hairColor,
     mrz: winningMrz,
+    mrzModel:
+      winningMrz === back.mrz
+        ? (back.mrzModel ?? front.mrzModel)
+        : (front.mrzModel ?? back.mrzModel),
     unmappedFields,
     fieldSources,
     rawOcrText: mergedRawOcrText,
@@ -601,6 +636,7 @@ export function mergeDocumentSides(
     sourceDimensions: backHasMrz ? back.sourceDimensions : front.sourceDimensions,
     orientation: backHasMrz ? back.orientation : front.orientation,
     perspective: backHasMrz ? back.perspective : front.perspective,
+    quality: mergeQualityReports(front.quality, back.quality),
     previews: backHasMrz ? (back.previews ?? front.previews) : (front.previews ?? back.previews),
     sides: { front, back },
     sideAssignment,

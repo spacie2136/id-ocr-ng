@@ -6,8 +6,8 @@ import type { DocumentQuad, PerspectiveInfo, Point2D } from './types';
 export declare function orderQuadCorners(points: Point2D[]): DocumentQuad;
 /**
  * Pure-JS 4-corner document quadrilateral detector.
- * Returns null if the image is already a tightly cropped flat scan (or no reliable quad exists)
- * so flat full-bleed scans are never over-cropped.
+ * Returns null if the image is already a tightly cropped / full-bleed flat scan
+ * (or if no reliable document quad exists) so flat scans and MRZ zones are never over-cropped.
  */
 export declare function detectDocumentQuad(source: HTMLImageElement | HTMLCanvasElement): PerspectiveInfo | null;
 /**

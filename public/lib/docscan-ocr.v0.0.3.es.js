@@ -1,4 +1,4 @@
-/* DocScan OCR v0.0.1 | Client-Side Browser Passport & ID Scanner */
+/* DocScan OCR v0.0.3 | Client-Side Browser Passport & ID Scanner */
 // \0rolldown/runtime.js
 var e = Object.defineProperty, t = Object.getOwnPropertyDescriptor, n = Object.getOwnPropertyNames, r = Object.prototype.hasOwnProperty, i = (e, t, n) => () => {
 	if (n) throw n[0];
@@ -23,7 +23,7 @@ var e = Object.defineProperty, t = Object.getOwnPropertyDescriptor, n = Object.g
 }, c = (t) => r.call(t, "module.exports") ? t["module.exports"] : s(e({}, "__esModule", { value: !0 }), t), l = /* @__PURE__ */ ((e) => typeof require < "u" ? require : typeof Proxy < "u" ? new Proxy(e, { get: (e, t) => (typeof require < "u" ? require : e)[t] }) : e)(function(e) {
 	if (typeof require < "u") return require.apply(this, arguments);
 	throw Error("Calling `require` for \"" + e + "\" in an environment that doesn't expose the `require` function. See https://rolldown.rs/in-depth/bundling-cjs#require-external-modules for more details.");
-}), u = "0.0.1", d = /* @__PURE__ */ a(((e, t) => {
+}), u = "0.0.3", d = /* @__PURE__ */ a(((e, t) => {
 	var n = function(e) {
 		var t = Object.prototype, n = t.hasOwnProperty, r = Object.defineProperty || function(e, t, n) {
 			e[t] = n.value;
@@ -509,13 +509,13 @@ var e = Object.defineProperty, t = Object.getOwnPropertyDescriptor, n = Object.g
 		workerBlobURL: !0,
 		logger: () => {}
 	};
-})), ee = /* @__PURE__ */ a(((e, t) => {
+})), H = /* @__PURE__ */ a(((e, t) => {
 	var n = (B(), c(y).default).version;
 	t.exports = {
 		...V(),
 		workerPath: `https://cdn.jsdelivr.net/npm/tesseract.js@v${n}/dist/worker.min.js`
 	};
-})), te = /* @__PURE__ */ a(((e, t) => {
+})), U = /* @__PURE__ */ a(((e, t) => {
 	t.exports = ({ workerPath: e, workerBlobURL: t }) => {
 		let n;
 		if (Blob && URL && t) {
@@ -524,21 +524,21 @@ var e = Object.defineProperty, t = Object.getOwnPropertyDescriptor, n = Object.g
 		} else n = new Worker(e);
 		return n;
 	};
-})), ne = /* @__PURE__ */ a(((e, t) => {
+})), W = /* @__PURE__ */ a(((e, t) => {
 	t.exports = (e) => {
 		e.terminate();
 	};
-})), re = /* @__PURE__ */ a(((e, t) => {
+})), ee = /* @__PURE__ */ a(((e, t) => {
 	t.exports = (e, t) => {
 		e.onmessage = ({ data: e }) => {
 			t(e);
 		};
 	};
-})), ie = /* @__PURE__ */ a(((e, t) => {
+})), te = /* @__PURE__ */ a(((e, t) => {
 	t.exports = async (e, t) => {
 		e.postMessage(t);
 	};
-})), H = /* @__PURE__ */ a(((e, t) => {
+})), ne = /* @__PURE__ */ a(((e, t) => {
 	var n = (e) => new Promise((t, n) => {
 		let r = new FileReader();
 		r.onload = () => {
@@ -555,17 +555,17 @@ var e = Object.defineProperty, t = Object.getOwnPropertyDescriptor, n = Object.g
 		})) : typeof OffscreenCanvas < "u" && e instanceof OffscreenCanvas ? t = await n(await e.convertToBlob()) : (e instanceof File || e instanceof Blob) && (t = await n(e)), new Uint8Array(t));
 	};
 	t.exports = r;
-})), ae = /* @__PURE__ */ a(((e, t) => {
+})), re = /* @__PURE__ */ a(((e, t) => {
 	t.exports = {
-		defaultOptions: ee(),
-		spawnWorker: te(),
-		terminateWorker: ne(),
-		onMessage: re(),
-		send: ie(),
-		loadImage: H()
+		defaultOptions: H(),
+		spawnWorker: U(),
+		terminateWorker: W(),
+		onMessage: ee(),
+		send: te(),
+		loadImage: ne()
 	};
-})), oe = /* @__PURE__ */ a(((e, t) => {
-	var n = _(), r = p(), { log: i } = m(), a = f(), o = v(), { defaultOptions: s, spawnWorker: c, terminateWorker: l, onMessage: u, loadImage: d, send: h } = ae(), g = 0;
+})), G = /* @__PURE__ */ a(((e, t) => {
+	var n = _(), r = p(), { log: i } = m(), a = f(), o = v(), { defaultOptions: s, spawnWorker: c, terminateWorker: l, onMessage: u, loadImage: d, send: h } = re(), g = 0;
 	t.exports = async (e = "eng", t = o.LSTM_ONLY, f = {}, p = {}) => {
 		let m = a("Worker", g), { logger: _, errorHandler: v, ...y } = n({
 			...s,
@@ -666,14 +666,14 @@ var e = Object.defineProperty, t = Object.getOwnPropertyDescriptor, n = Object.g
 				options: t,
 				output: n
 			}
-		})), ee = async (e, t) => {
+		})), H = async (e, t) => {
 			if (w) throw Error("`worker.detect` requires Legacy model, which was not loaded.");
 			return A(r({
 				id: t,
 				action: "detect",
 				payload: { image: await d(e) }
 			}));
-		}, te = async () => (k !== null && (l(k), k = null), Promise.resolve());
+		}, U = async () => (k !== null && (l(k), k = null), Promise.resolve());
 		u(k, ({ workerId: e, jobId: t, status: n, action: r, data: a }) => {
 			let o = `${r}-${t}`;
 			if (n === "resolve") i(`[${e}]: Complete ${t}`), b[o].resolve({
@@ -688,7 +688,7 @@ var e = Object.defineProperty, t = Object.getOwnPropertyDescriptor, n = Object.g
 				userJobId: t
 			});
 		});
-		let ne = {
+		let W = {
 			id: m,
 			worker: k,
 			load: j,
@@ -699,13 +699,13 @@ var e = Object.defineProperty, t = Object.getOwnPropertyDescriptor, n = Object.g
 			reinitialize: z,
 			setParameters: B,
 			recognize: V,
-			detect: ee,
-			terminate: te
+			detect: H,
+			terminate: U
 		};
-		return M().then(() => L(e)).then(() => R(e, t, p)).then(() => E(ne)).catch(() => {}), D;
+		return M().then(() => L(e)).then(() => R(e, t, p)).then(() => E(W)).catch(() => {}), D;
 	};
-})), se = /* @__PURE__ */ a(((e, t) => {
-	var n = oe();
+})), K = /* @__PURE__ */ a(((e, t) => {
+	var n = G();
 	t.exports = {
 		recognize: async (e, t, r) => {
 			let i = await n(t, 1, r);
@@ -720,7 +720,7 @@ var e = Object.defineProperty, t = Object.getOwnPropertyDescriptor, n = Object.g
 			});
 		}
 	};
-})), ce = /* @__PURE__ */ a(((e, t) => {
+})), ie = /* @__PURE__ */ a(((e, t) => {
 	t.exports = {
 		AFR: "afr",
 		AMH: "amh",
@@ -825,7 +825,7 @@ var e = Object.defineProperty, t = Object.getOwnPropertyDescriptor, n = Object.g
 		VIE: "vie",
 		YID: "yid"
 	};
-})), le = /* @__PURE__ */ a(((e, t) => {
+})), ae = /* @__PURE__ */ a(((e, t) => {
 	t.exports = {
 		OSD_ONLY: "0",
 		AUTO_OSD: "1",
@@ -842,9 +842,9 @@ var e = Object.defineProperty, t = Object.getOwnPropertyDescriptor, n = Object.g
 		SPARSE_TEXT_OSD: "12",
 		RAW_LINE: "13"
 	};
-})), U = (/* @__PURE__ */ a(((e, t) => {
+})), q = (/* @__PURE__ */ a(((e, t) => {
 	d();
-	var n = h(), r = oe(), i = se(), a = ce(), o = v(), s = le(), { setLogging: c } = m();
+	var n = h(), r = G(), i = K(), a = ie(), o = v(), s = ae(), { setLogging: c } = m();
 	t.exports = {
 		languages: a,
 		OEM: o,
@@ -854,7 +854,7 @@ var e = Object.defineProperty, t = Object.getOwnPropertyDescriptor, n = Object.g
 		setLogging: c,
 		...i
 	};
-})))(), W = {
+})))(), oe = {
 	AFG: "Afghanistan",
 	ALB: "Albania",
 	DZA: "Algeria",
@@ -1070,13 +1070,13 @@ var e = Object.defineProperty, t = Object.getOwnPropertyDescriptor, n = Object.g
 	UNA: "United Nations Specialized Agency",
 	UNK: "Kosovo (UNMIK)"
 };
-function ue(e) {
+function se(e) {
 	if (!e) return null;
 	let t = e.trim().replace(/<+$/g, "").toUpperCase();
-	return t ? W[t] ? W[t] : t === "D" ? "Germany" : W[e.trim().toUpperCase()] ?? null : null;
+	return t ? oe[t] ? oe[t] : t === "D" ? "Germany" : oe[e.trim().toUpperCase()] ?? null : null;
 }
 // src/scanner/imagePreprocessor.ts
-function de(e) {
+function ce(e) {
 	return new Promise((t, n) => {
 		if (e instanceof HTMLImageElement) {
 			e.complete && e.naturalWidth > 0 ? t(e) : (e.onload = () => t(e), e.onerror = () => n(/* @__PURE__ */ Error("Failed to load HTMLImageElement")));
@@ -1097,7 +1097,7 @@ function de(e) {
 		}, typeof e == "string" ? r.src = e : (i = URL.createObjectURL(e), r.src = i);
 	});
 }
-function fe(e, t = 400) {
+function le(e, t = 400) {
 	let n = Math.max(1, e instanceof HTMLImageElement && e.naturalWidth || e.width), r = Math.max(1, e instanceof HTMLImageElement && e.naturalHeight || e.height), i = Math.min(1, t / Math.max(n, r)), a = Math.max(1, Math.round(n * i)), o = Math.max(1, Math.round(r * i)), s = document.createElement("canvas");
 	s.width = a, s.height = o;
 	let c = s.getContext("2d", { willReadFrequently: !0 });
@@ -1111,7 +1111,7 @@ function fe(e, t = 400) {
 		height: o
 	};
 }
-function pe(e, t, n) {
+function ue(e, t, n) {
 	let r = e.getImageData(0, 0, t, n), i = r.data, a = /* @__PURE__ */ new Uint32Array(256), o = Math.floor(t * .02), s = Math.floor(n * .02), c = 0;
 	for (let e = 0; e < n; e++) for (let r = 0; r < t; r++) {
 		let l = (e * t + r) * 4, u = Math.round(.299 * i[l] + .587 * i[l + 1] + .114 * i[l + 2]);
@@ -1135,7 +1135,7 @@ function pe(e, t, n) {
 	}
 	e.putImageData(r, 0, 0);
 }
-function me(e, t, n, r, i) {
+function de(e, t, n, r, i) {
 	let a = e.getImageData(0, 0, t, n), o = a.data, s = t * n, c = new Uint8ClampedArray(s);
 	for (let e = 0, t = 0; e < o.length; e += 4, t++) c[t] = Math.round(.299 * o[e] + .587 * o[e + 1] + .114 * o[e + 2]);
 	if (!i) return {
@@ -1171,7 +1171,7 @@ function me(e, t, n, r, i) {
 		height: n
 	};
 }
-function he(e) {
+function J(e) {
 	let t = e.width, n = e.height, r = e.getContext("2d", { willReadFrequently: !0 });
 	if (!r) return e;
 	let i = r.getImageData(0, 0, t, n).data, a = (e) => i[e] < 248 || i[e + 1] < 248 || i[e + 2] < 248, o = (e) => {
@@ -1198,20 +1198,20 @@ function he(e) {
 	let h = m.getContext("2d", { willReadFrequently: !0 });
 	return h ? (h.drawImage(e, u, c, f, p, 0, 0, f, p), m) : e;
 }
-function ge(e, t, n, r, i, a) {
+function fe(e, t, n, r, i, a) {
 	let o = Math.round(t * .018), s = Math.max(1, t - o * 2), c = Math.round(n * r), l = Math.max(1, Math.round(n * i) - c), u = s < 1500 ? 1800 / s : 1.15, d = Math.round(s * u), f = Math.round(l * u), p = d + 64, m = f + 64, h = document.createElement("canvas");
 	h.width = p, h.height = m;
 	let g = h.getContext("2d", { willReadFrequently: !0 });
 	if (!g) throw Error("2D canvas context unavailable");
 	g.fillStyle = "#ffffff", g.fillRect(0, 0, p, m), g.imageSmoothingEnabled = !0, g.imageSmoothingQuality = "high", g.drawImage(e, o, c, s, l, 32, 32, d, f);
-	let _ = me(g, p, m, 32, a);
+	let _ = de(g, p, m, 32, a);
 	return {
 		dataUrl: h.toDataURL("image/png"),
 		grayscale: _
 	};
 }
-async function _e(e, t = {}) {
-	let { preprocess: n = !0, rotation: r = 0, deskewDegrees: i = 0 } = t, a = e instanceof HTMLCanvasElement ? e : await de(e), o = a instanceof HTMLImageElement && a.naturalWidth || a.width, s = a instanceof HTMLImageElement && a.naturalHeight || a.height, c = r + i, l = Math.abs(i) >= .1, u, d;
+async function pe(e, t = {}) {
+	let { preprocess: n = !0, rotation: r = 0, deskewDegrees: i = 0 } = t, a = e instanceof HTMLCanvasElement ? e : await ce(e), o = a instanceof HTMLImageElement && a.naturalWidth || a.width, s = a instanceof HTMLImageElement && a.naturalHeight || a.height, c = r + i, l = Math.abs(i) >= .1, u, d;
 	if (l) {
 		let e = c * Math.PI / 180, t = Math.abs(Math.cos(e)), n = Math.abs(Math.sin(e));
 		u = Math.max(1, Math.round(o * t + s * n)), d = Math.max(1, Math.round(o * n + s * t));
@@ -1227,13 +1227,13 @@ async function _e(e, t = {}) {
 	if (!m) throw Error("2D canvas context unavailable");
 	m.fillStyle = "#ffffff", m.fillRect(0, 0, p.width, p.height), m.imageSmoothingEnabled = !0, m.imageSmoothingQuality = "high", m.save(), m.translate(p.width / 2, p.height / 2), m.rotate(c * Math.PI / 180);
 	let h = Math.round(o * f), g = Math.round(s * f);
-	m.drawImage(a, -h / 2, -g / 2, h, g), m.restore(), l && (p = he(p));
+	m.drawImage(a, -h / 2, -g / 2, h, g), m.restore(), l && (p = J(p));
 	let _ = p.width, v = p.height, y = p.toDataURL("image/png"), b = document.createElement("canvas");
 	b.width = _, b.height = v;
 	let x = b.getContext("2d", { willReadFrequently: !0 });
 	if (!x) throw Error("2D canvas context unavailable");
-	x.drawImage(p, 0, 0), n && pe(x, _, v);
-	let S = b.toDataURL("image/png"), C = ge(p, _, v, .6, .982, n), w = ge(p, _, v, .7, .982, n);
+	x.drawImage(p, 0, 0), n && ue(x, _, v);
+	let S = b.toDataURL("image/png"), C = fe(p, _, v, .6, .982, n), w = fe(p, _, v, .7, .982, n);
 	return {
 		originalDataUrl: y,
 		enhancedDataUrl: S,
@@ -1246,11 +1246,11 @@ async function _e(e, t = {}) {
 	};
 }
 // src/scanner/mrzParser.ts
-var ve = [
+var me = [
 	7,
 	3,
 	1
-], ye = {
+], he = {
 	"<": 0,
 	0: 0,
 	1: 1,
@@ -1288,7 +1288,7 @@ var ve = [
 	X: 33,
 	Y: 34,
 	Z: 35
-}, be = {
+}, ge = {
 	O: ["0"],
 	D: ["0"],
 	Q: ["0"],
@@ -1300,39 +1300,39 @@ var ve = [
 	G: ["6"],
 	B: ["8"]
 };
-function G(e) {
+function _e(e) {
 	let t = 0;
 	for (let n = 0; n < e.length; n++) {
-		let r = ye[e[n]] ?? 0;
-		t += r * ve[n % 3];
+		let r = he[e[n]] ?? 0;
+		t += r * me[n % 3];
 	}
 	return String(t % 10);
 }
-function xe(e) {
+function ve(e) {
 	let t = e.toUpperCase();
 	return /[A-Z0-9<]/.test(t) ? t : "<";
 }
-function K(e) {
+function Y(e) {
 	return e.replace(/O/g, "0").replace(/Q/g, "0").replace(/D/g, "0").replace(/I/g, "1").replace(/L/g, "1").replace(/Z/g, "2").replace(/S/g, "5").replace(/G/g, "6").replace(/B/g, "8");
 }
-function q(e) {
+function X(e) {
 	return e.replace(/0/g, "O").replace(/1/g, "I").replace(/2/g, "Z").replace(/5/g, "S").replace(/6/g, "G").replace(/8/g, "B");
 }
-function Se(e, t) {
-	let n = K(t);
-	if (!/^\d$/.test(n) || G(e) === n) return e;
+function ye(e, t) {
+	let n = Y(t);
+	if (!/^\d$/.test(n) || _e(e) === n) return e;
 	let r = e.replace(/[ODQ]/g, "0");
-	if (G(r) === n) return r;
+	if (_e(r) === n) return r;
 	let i = (e) => e.replace(/[ODQ]/g, "0").replace(/[IL]/g, "1").replace(/Z/g, "2").replace(/S/g, "5").replace(/G/g, "6").replace(/B/g, "8"), a = e.match(/^([A-Z]{1,3})(.*)$/);
 	if (a) {
 		let e = a[1] + i(a[2]);
-		if (G(e) === n) return e;
+		if (_e(e) === n) return e;
 	}
 	let o = i(e);
-	if (G(o) === n) return o;
+	if (_e(o) === n) return o;
 	let s = [];
 	for (let t = e.length - 1; t >= 0; t--) {
-		let n = be[e[t]];
+		let n = ge[e[t]];
 		n && s.push({
 			idx: t,
 			reps: n
@@ -1340,7 +1340,7 @@ function Se(e, t) {
 	}
 	for (let t of s) for (let r of t.reps) {
 		let i = e.slice(0, t.idx) + r + e.slice(t.idx + 1);
-		if (G(i) === n) return i;
+		if (_e(i) === n) return i;
 	}
 	for (let t = 0; t < s.length; t++) for (let r = t + 1; r < s.length; r++) {
 		let i = s[t], a = s[r];
@@ -1348,26 +1348,26 @@ function Se(e, t) {
 			let o = e.split("");
 			o[i.idx] = t, o[a.idx] = r;
 			let s = o.join("");
-			if (G(s) === n) return s;
+			if (_e(s) === n) return s;
 		}
 	}
 	return e;
 }
-function Ce(e, t) {
-	let n = K(e);
+function be(e, t) {
+	let n = Y(e);
 	if (!/^\d{6}$/.test(n)) return null;
 	let r = parseInt(n.slice(0, 2), 10), i = parseInt(n.slice(2, 4), 10), a = parseInt(n.slice(4, 6), 10);
 	if (i < 1 || i > 12 || a < 1 || a > 31) return null;
 	let o = (/* @__PURE__ */ new Date()).getFullYear(), s = o % 100, c = Math.floor(o / 100) * 100, l;
 	return l = t === "birth" ? r > s ? c - 100 + r : c + r : r <= s + 50 ? c + r : c - 100 + r, `${l}-${String(i).padStart(2, "0")}-${String(a).padStart(2, "0")}`;
 }
-function we(e) {
+function xe(e) {
 	let t = e.replace(/<+$/g, ""), n = "";
 	for (; t !== n;) n = t, t = t.replace(/(?:<+[KL]{2,}|<<[KL])$/g, "").replace(/<+$/g, "");
 	return t;
 }
-function Te(e) {
-	let t = we(e).split("<<"), n = t[0] ?? "", r = t.slice(1).join("<"), i = (e) => q(e).split(/<+/).map((e) => e.trim()).filter(Boolean), a = i(n), o = i(r);
+function Se(e) {
+	let t = xe(e).split("<<"), n = t[0] ?? "", r = t.slice(1).join("<"), i = (e) => X(e).split(/<+/).map((e) => e.trim()).filter(Boolean), a = i(n), o = i(r);
 	return {
 		surname: a.join(" "),
 		surnames: a,
@@ -1375,27 +1375,27 @@ function Te(e) {
 		givenNamesList: o
 	};
 }
-function Ee(e) {
+function Ce(e) {
 	let t = e.toUpperCase();
 	return t === "M" ? "M" : t === "F" ? "F" : t === "X" ? "X" : "Unspecified";
 }
-function De(e) {
+function we(e) {
 	let t = e.trim();
 	return !!(!t || /[a-z]{3,}/.test(t) && !t.includes("<") || /[/()]/.test(t) && !t.includes("<"));
 }
-function Oe(e) {
-	return e.replace(/\s+/g, "").split("").map(xe).join("");
+function Te(e) {
+	return e.replace(/\s+/g, "").split("").map(ve).join("");
 }
-function ke(e) {
+function Ee(e) {
 	if (e.length < 26 || !/^[A-Z0-9<]+$/.test(e) || e.startsWith("<")) return !1;
 	let t = (e.match(/</g) || []).length, n = (e.match(/\d/g) || []).length;
 	return t >= 2 || n >= 4 && e.length >= 28;
 }
-function J(e, t) {
+function De(e, t) {
 	return e.length === t ? e : e.length > t ? e.slice(0, t) : e.padEnd(t, "<");
 }
-function Y(e, t, n, r) {
-	let i = K(r), a = G(n);
+function Z(e, t, n, r) {
+	let i = Y(r), a = _e(n);
 	return {
 		label: e,
 		field: t,
@@ -1404,21 +1404,21 @@ function Y(e, t, n, r) {
 		valid: i === a
 	};
 }
-function Ae(e, t) {
+function Oe(e, t) {
 	return t === "D" && e.startsWith("D") && e.length === 2 ? "D" : e;
 }
-function je(e, t, n = !1) {
-	let r = J(e, 44), i = J(t, 44), a = q(r.slice(0, 2)).replace(/</g, ""), o = q(r.slice(2, 5)).replace(/</g, ""), { surname: s, surnames: c, givenNames: l, givenNamesList: u } = Te(r.slice(5, 44)), d = i.slice(9, 10), f = Se(i.slice(0, 9), d), p = q(i.slice(10, 13)).replace(/</g, "");
-	o = Ae(o, p), !o && p && (o = p);
-	let m = K(i.slice(13, 19)), h = i.slice(19, 20), g = Ee(i.slice(20, 21)), _ = K(i.slice(21, 27)), v = i.slice(27, 28), y = n ? i.slice(28, 44) : i.slice(28, 42), b = n ? "" : i.slice(42, 43), x = n ? "" : i.slice(43, 44), S = [
-		Y("Document Number", "documentNumber", f, d),
-		Y("Date of Birth", "dateOfBirth", m, h),
-		Y("Date of Expiry", "dateOfExpiry", _, v)
+function ke(e, t, n = !1) {
+	let r = De(e, 44), i = De(t, 44), a = X(r.slice(0, 2)).replace(/</g, ""), o = X(r.slice(2, 5)).replace(/</g, ""), { surname: s, surnames: c, givenNames: l, givenNamesList: u } = Se(r.slice(5, 44)), d = i.slice(9, 10), f = ye(i.slice(0, 9), d), p = X(i.slice(10, 13)).replace(/</g, "");
+	o = Oe(o, p), !o && p && (o = p);
+	let m = Y(i.slice(13, 19)), h = i.slice(19, 20), g = Ce(i.slice(20, 21)), _ = Y(i.slice(21, 27)), v = i.slice(27, 28), y = n ? i.slice(28, 44) : i.slice(28, 42), b = n ? "" : i.slice(42, 43), x = n ? "" : i.slice(43, 44), S = [
+		Z("Document Number", "documentNumber", f, d),
+		Z("Date of Birth", "dateOfBirth", m, h),
+		Z("Date of Expiry", "dateOfExpiry", _, v)
 	];
 	if (!n) {
-		y.replace(/</g, "").length > 0 && S.push(Y("Personal Number", "optionalData1", y, b));
+		y.replace(/</g, "").length > 0 && S.push(Z("Personal Number", "optionalData1", y, b));
 		let e = f + d + m + h + _ + v + y + b;
-		S.push(Y("Composite Check", "composite", e, x));
+		S.push(Z("Composite Check", "composite", e, x));
 	}
 	let C = S.filter((e) => e.valid).length, w = n ? "MRVA" : "TD3", T = f + d + i.slice(10, 13) + m + h + i.slice(20, 21) + _ + v + i.slice(28, 44);
 	return {
@@ -1432,10 +1432,10 @@ function je(e, t, n = !1) {
 		givenNamesList: u,
 		documentNumber: f.replace(/</g, ""),
 		nationality: p,
-		dateOfBirth: Ce(m, "birth"),
+		dateOfBirth: be(m, "birth"),
 		rawDateOfBirth: m,
 		sex: g,
-		dateOfExpiry: Ce(_, "expiry"),
+		dateOfExpiry: be(_, "expiry"),
 		rawDateOfExpiry: _,
 		optionalData1: y.replace(/</g, ""),
 		optionalData2: "",
@@ -1445,14 +1445,14 @@ function je(e, t, n = !1) {
 		totalChecks: S.length
 	};
 }
-function Me(e, t, n) {
-	let r = J(e, 30), i = J(t, 30), a = J(n, 30), o = q(r.slice(0, 2)).replace(/</g, ""), s = q(r.slice(2, 5)).replace(/</g, ""), c = r.slice(14, 15), l = Se(r.slice(5, 14), c), u = r.slice(15, 30), d = K(i.slice(0, 6)), f = i.slice(6, 7), p = Ee(i.slice(7, 8)), m = K(i.slice(8, 14)), h = i.slice(14, 15), g = q(i.slice(15, 18)).replace(/</g, "");
-	s = Ae(s, g), !s && g && (s = g);
-	let _ = i.slice(18, 29), v = i.slice(29, 30), { surname: y, surnames: b, givenNames: x, givenNamesList: S } = Te(a), C = r.slice(0, 5) + l + c + u, w = d + f + i.slice(7, 8) + m + h + i.slice(15, 30), T = l + c + u + d + f + m + h + _, E = [
-		Y("Document Number", "documentNumber", l, c),
-		Y("Date of Birth", "dateOfBirth", d, f),
-		Y("Date of Expiry", "dateOfExpiry", m, h),
-		Y("Composite Check", "composite", T, v)
+function Ae(e, t, n) {
+	let r = De(e, 30), i = De(t, 30), a = De(n, 30), o = X(r.slice(0, 2)).replace(/</g, ""), s = X(r.slice(2, 5)).replace(/</g, ""), c = r.slice(14, 15), l = ye(r.slice(5, 14), c), u = r.slice(15, 30), d = Y(i.slice(0, 6)), f = i.slice(6, 7), p = Ce(i.slice(7, 8)), m = Y(i.slice(8, 14)), h = i.slice(14, 15), g = X(i.slice(15, 18)).replace(/</g, "");
+	s = Oe(s, g), !s && g && (s = g);
+	let _ = i.slice(18, 29), v = i.slice(29, 30), { surname: y, surnames: b, givenNames: x, givenNamesList: S } = Se(a), C = r.slice(0, 5) + l + c + u, w = d + f + i.slice(7, 8) + m + h + i.slice(15, 30), T = l + c + u + d + f + m + h + _, E = [
+		Z("Document Number", "documentNumber", l, c),
+		Z("Date of Birth", "dateOfBirth", d, f),
+		Z("Date of Expiry", "dateOfExpiry", m, h),
+		Z("Composite Check", "composite", T, v)
 	], D = E.filter((e) => e.valid).length;
 	return {
 		format: "TD1",
@@ -1469,10 +1469,10 @@ function Me(e, t, n) {
 		givenNamesList: S,
 		documentNumber: l.replace(/</g, ""),
 		nationality: g,
-		dateOfBirth: Ce(d, "birth"),
+		dateOfBirth: be(d, "birth"),
 		rawDateOfBirth: d,
 		sex: p,
-		dateOfExpiry: Ce(m, "expiry"),
+		dateOfExpiry: be(m, "expiry"),
 		rawDateOfExpiry: m,
 		optionalData1: u.replace(/</g, ""),
 		optionalData2: _.replace(/</g, ""),
@@ -1482,17 +1482,17 @@ function Me(e, t, n) {
 		totalChecks: E.length
 	};
 }
-function Ne(e, t, n = !1) {
-	let r = J(e, 36), i = J(t, 36), a = q(r.slice(0, 2)).replace(/</g, ""), o = q(r.slice(2, 5)).replace(/</g, ""), { surname: s, surnames: c, givenNames: l, givenNamesList: u } = Te(r.slice(5, 36)), d = i.slice(9, 10), f = Se(i.slice(0, 9), d), p = q(i.slice(10, 13)).replace(/</g, "");
-	o = Ae(o, p), !o && p && (o = p);
-	let m = K(i.slice(13, 19)), h = i.slice(19, 20), g = Ee(i.slice(20, 21)), _ = K(i.slice(21, 27)), v = i.slice(27, 28), y = n ? i.slice(28, 36) : i.slice(28, 35), b = n ? "" : i.slice(35, 36), x = [
-		Y("Document Number", "documentNumber", f, d),
-		Y("Date of Birth", "dateOfBirth", m, h),
-		Y("Date of Expiry", "dateOfExpiry", _, v)
+function je(e, t, n = !1) {
+	let r = De(e, 36), i = De(t, 36), a = X(r.slice(0, 2)).replace(/</g, ""), o = X(r.slice(2, 5)).replace(/</g, ""), { surname: s, surnames: c, givenNames: l, givenNamesList: u } = Se(r.slice(5, 36)), d = i.slice(9, 10), f = ye(i.slice(0, 9), d), p = X(i.slice(10, 13)).replace(/</g, "");
+	o = Oe(o, p), !o && p && (o = p);
+	let m = Y(i.slice(13, 19)), h = i.slice(19, 20), g = Ce(i.slice(20, 21)), _ = Y(i.slice(21, 27)), v = i.slice(27, 28), y = n ? i.slice(28, 36) : i.slice(28, 35), b = n ? "" : i.slice(35, 36), x = [
+		Z("Document Number", "documentNumber", f, d),
+		Z("Date of Birth", "dateOfBirth", m, h),
+		Z("Date of Expiry", "dateOfExpiry", _, v)
 	];
 	if (!n) {
 		let e = f + d + m + h + _ + v + y;
-		x.push(Y("Composite Check", "composite", e, b));
+		x.push(Z("Composite Check", "composite", e, b));
 	}
 	let S = x.filter((e) => e.valid).length;
 	return {
@@ -1506,10 +1506,10 @@ function Ne(e, t, n = !1) {
 		givenNamesList: u,
 		documentNumber: f.replace(/</g, ""),
 		nationality: p,
-		dateOfBirth: Ce(m, "birth"),
+		dateOfBirth: be(m, "birth"),
 		rawDateOfBirth: m,
 		sex: g,
-		dateOfExpiry: Ce(_, "expiry"),
+		dateOfExpiry: be(_, "expiry"),
 		rawDateOfExpiry: _,
 		optionalData1: y.replace(/</g, ""),
 		optionalData2: "",
@@ -1519,29 +1519,29 @@ function Ne(e, t, n = !1) {
 		totalChecks: x.length
 	};
 }
-function Pe(e) {
-	let t = e.split(/\r?\n/).filter((e) => !De(e)).map(Oe).filter(ke);
+function Me(e) {
+	let t = e.split(/\r?\n/).filter((e) => !we(e)).map(Te).filter(Ee);
 	if (t.length < 2) return null;
 	let n = [];
 	for (let e = 0; e <= t.length - 3; e++) {
 		let r = t[e], i = t[e + 1], a = t[e + 2], o = (r.length + i.length + a.length) / 3;
-		o >= 27 && o <= 35 && /^[IAC]/.test(r) && n.push(Me(r, i, a));
+		o >= 27 && o <= 35 && /^[IAC]/.test(r) && n.push(Ae(r, i, a));
 	}
 	for (let e = 0; e <= t.length - 2; e++) {
 		let r = t[e], i = t[e + 1], a = Math.max(r.length, i.length), o = Math.min(r.length, i.length);
 		if (a >= 40 && o >= 38 && /^[PV]/.test(r)) {
 			let e = r.startsWith("V");
-			n.push(je(r, i, e));
+			n.push(ke(r, i, e));
 		} else if (o >= 33 && a <= 39 && /^[PVIAC]/.test(r) && !/^[IAC]/.test(r)) {
 			let e = r.startsWith("V");
-			n.push(Ne(r, i, e));
+			n.push(je(r, i, e));
 		}
 	}
 	if (n.length === 0) {
-		if (t.length >= 3 && t[t.length - 3].length <= 36 && /^[IAC]/.test(t[t.length - 3])) n.push(Me(t[t.length - 3], t[t.length - 2], t[t.length - 1]));
+		if (t.length >= 3 && t[t.length - 3].length <= 36 && /^[IAC]/.test(t[t.length - 3])) n.push(Ae(t[t.length - 3], t[t.length - 2], t[t.length - 1]));
 		else {
 			let e = t[t.length - 2], r = t[t.length - 1];
-			/^[PVIAC]/.test(e) && (Math.max(e.length, r.length) >= 39 ? n.push(je(e, r, e.startsWith("V"))) : n.push(Ne(e, r, e.startsWith("V"))));
+			/^[PVIAC]/.test(e) && (Math.max(e.length, r.length) >= 39 ? n.push(ke(e, r, e.startsWith("V"))) : n.push(je(e, r, e.startsWith("V"))));
 		}
 	}
 	return n.length === 0 ? null : (n.sort((e, t) => {
@@ -1550,7 +1550,7 @@ function Pe(e) {
 	}), n[0]);
 }
 // src/scanner/orientation.ts
-function Fe(e, t, n) {
+function Ne(e, t, n) {
 	let r = t + 1, i = new Float64Array(r * (n + 1));
 	for (let a = 1; a <= n; a++) {
 		let n = 0, o = (a - 1) * t, s = a * r, c = (a - 1) * r;
@@ -1558,8 +1558,8 @@ function Fe(e, t, n) {
 	}
 	return i;
 }
-function Ie(e, t, n) {
-	let r = Fe(e, t, n), i = t + 1, a = Math.max(3, Math.round(Math.min(t, n) / 70)), o = Math.max(2, Math.floor(t * .025)), s = Math.max(2, Math.floor(n * .025)), c = t / 2, l = n / 2, u = [];
+function Pe(e, t, n) {
+	let r = Ne(e, t, n), i = t + 1, a = Math.max(3, Math.round(Math.min(t, n) / 70)), o = Math.max(2, Math.floor(t * .025)), s = Math.max(2, Math.floor(n * .025)), c = t / 2, l = n / 2, u = [];
 	for (let d = s; d < n - s; d++) {
 		let s = Math.max(0, d - a), f = Math.min(n, d + a + 1), p = s * i, m = f * i, h = d * t;
 		for (let n = o; n < t - o; n++) {
@@ -1592,7 +1592,7 @@ function Ie(e, t, n) {
 	for (let e = 0; e < d; e++) f.push(u[Math.floor(e * p)]);
 	return f;
 }
-function Le(e, t, n, r) {
+function Fe(e, t, n, r) {
 	let i = t * Math.PI / 180, a = Math.cos(i), o = Math.sin(i), s = Math.ceil(r * 2 / n) + 4, c = Math.floor(s / 2), l = new Float32Array(s), u = new Float32Array(s);
 	for (let t = 0; t < e.length; t++) {
 		let r = e[t], i = r.dx * a + r.dy * o, d = -r.dx * o + r.dy * a, f = Math.round(d / n) + c;
@@ -1610,7 +1610,7 @@ function Le(e, t, n, r) {
 		vScore: f
 	};
 }
-function Re(e, t, n, r) {
+function Ie(e, t, n, r) {
 	let i = t * Math.PI / 180, a = Math.cos(i), o = Math.sin(i), s = Math.abs(n * a) + Math.abs(r * o), c = Math.abs(n * o) + Math.abs(r * a), l = s / 2, u = c / 2, d = Array.from({ length: 40 }, () => /* @__PURE__ */ new Uint8Array(48)), f = Array.from({ length: 40 }, () => /* @__PURE__ */ new Uint8Array(48)), p = /* @__PURE__ */ new Float32Array(40), m = /* @__PURE__ */ new Float32Array(40);
 	for (let t = 0; t < e.length; t++) {
 		let n = e[t], r = n.dx * a - n.dy * o + l, i = n.dx * o + n.dy * a + u, h = r / Math.max(1, s), g = i / Math.max(1, c);
@@ -1642,7 +1642,7 @@ function Re(e, t, n, r) {
 		hint: x
 	};
 }
-function ze(e, t, n) {
+function Le(e, t, n) {
 	if (t < 24 || n < 24 || e.length < t * n) return {
 		deskewDegrees: 0,
 		rankedCoarseRotations: [
@@ -1654,7 +1654,7 @@ function ze(e, t, n) {
 		axisConfidence: 1,
 		mrzEdgeHint: "none"
 	};
-	let r = Ie(e, t, n);
+	let r = Pe(e, t, n);
 	if (r.length < 40) return {
 		deskewDegrees: 0,
 		rankedCoarseRotations: [
@@ -1668,19 +1668,19 @@ function ze(e, t, n) {
 	};
 	let i = Math.hypot(t / 2, n / 2), a = Math.max(2, Math.round(Math.min(t, n) / 130)), o = 0, s = -1, c = 0, l = -1;
 	for (let e = -45; e <= 44; e += 1.5) {
-		let { hScore: t, vScore: n } = Le(r, e, a, i);
+		let { hScore: t, vScore: n } = Fe(r, e, a, i);
 		t > s && (s = t, o = e), n > l && (l = n, c = e);
 	}
 	let u = s >= l ? o : c, d = o, f = s, p = c, m = l;
 	for (let e = -1.8; e <= 1.801; e += .2) {
 		let t = u + e;
 		if (t < -45 || t > 45) continue;
-		let { hScore: n, vScore: o } = Le(r, t, a, i);
+		let { hScore: n, vScore: o } = Fe(r, t, a, i);
 		n > f && (f = n, d = t), o > m && (m = o, p = t);
 	}
 	let h = Math.round(-(f >= m ? d : p) * 10) / 10;
 	Math.abs(h) < .7 && (h = 0);
-	let g = Math.max(f, m) / Math.max(1, Math.min(f, m)), _ = Re(r, h, t, n), v = _.top > _.bottom * 1.15 ? [180, 0] : [0, 180], y = _.left > _.right * 1.08 ? [270, 90] : [90, 270], b = f >= m ? [
+	let g = Math.max(f, m) / Math.max(1, Math.min(f, m)), _ = Ie(r, h, t, n), v = _.top > _.bottom * 1.15 ? [180, 0] : [0, 180], y = _.left > _.right * 1.08 ? [270, 90] : [90, 270], b = f >= m ? [
 		v[0],
 		v[1],
 		y[0],
@@ -1699,7 +1699,7 @@ function ze(e, t, n) {
 	};
 }
 // src/scanner/pairMerger.ts
-function Be(e) {
+function Re(e) {
 	if (!e) return null;
 	let t = e.match(/^(\d{4})-(\d{2})-(\d{2})$/);
 	if (!t) return null;
@@ -1708,7 +1708,7 @@ function Be(e) {
 	let r = /* @__PURE__ */ new Date(), i = r.getFullYear() - n.getFullYear(), a = r.getMonth() - n.getMonth();
 	return (a < 0 || a === 0 && r.getDate() < n.getDate()) && i--, i >= 0 && i <= 130 ? i : null;
 }
-function Ve(e) {
+function ze(e) {
 	if (!e) return null;
 	let t = e.match(/^(\d{4})-(\d{2})-(\d{2})$/);
 	if (!t) return null;
@@ -1717,45 +1717,68 @@ function Ve(e) {
 	let r = /* @__PURE__ */ new Date();
 	return r.setHours(0, 0, 0, 0), n < r;
 }
-function He(e) {
+function Be(e) {
 	return e.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/[^A-Z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
 }
-function Ue(e) {
+function Ve(e) {
 	return (e ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
 }
-function We(e) {
+function He(e) {
 	return /[^\u0000-\u007F]/.test(e);
 }
-function Ge(e) {
+function Ue(e) {
 	return e ? (e.allCheckDigitsValid ? 100 : 0) + e.validCount * 18 + (e.surname ? 10 : 0) + (e.documentNumber ? 10 : 0) : -1;
 }
-function X(e, t, n, r, i, a, o, s) {
+function Q(e, t, n, r, i, a, o, s) {
 	let c = e?.trim() || null, l = t?.trim() || null;
 	if (c && l) {
-		if (a[i] = o?.includes("MRZ") || s?.includes("MRZ") ? "MRZ+VIZ" : "VIZ", He(c) === He(l)) {
-			if (We(c) && !We(l)) return c;
-			if (We(l) && !We(c)) return l;
+		if (a[i] = o?.includes("MRZ") || s?.includes("MRZ") ? "MRZ+VIZ" : "VIZ", Be(c) === Be(l)) {
+			if (He(c) && !He(l)) return c;
+			if (He(l) && !He(c)) return l;
 		}
 		return o === "MRZ" && s !== "MRZ" ? c : s === "MRZ" && o !== "MRZ" ? l : c.length !== l.length && Math.abs(c.length - l.length) >= 3 ? c.length > l.length ? c : l : n >= r ? c : l;
 	}
 	return c ? (a[i] = o ?? "VIZ", c) : l ? (a[i] = s ?? "VIZ", l) : null;
 }
-function Ke(e, t, n, r, i) {
+function We(e, t, n, r, i) {
 	let a = e?.trim() || null, o = t?.trim() || null, s = n?.trim() || null, c = o && s ? o.length >= s.length ? o : s : o || s;
 	if (a && c) {
 		i[r] = "MRZ+VIZ";
-		let e = He(a), t = He(c);
-		return t === e && We(c) || t.length > e.length && e.length >= 8 && t.startsWith(e.slice(0, Math.min(8, e.length))) ? c : a;
+		let e = Be(a), t = Be(c);
+		return t === e && He(c) || t.length > e.length && e.length >= 8 && t.startsWith(e.slice(0, Math.min(8, e.length))) ? c : a;
 	}
 	return a ? (i[r] = "MRZ", a) : c ? (i[r] = "VIZ", c) : null;
 }
-function qe(e, t) {
+function Ge(e, t) {
 	return e.documentType === "unknown" ? t.documentType === "unknown" ? "unknown" : t.documentType : e.documentType;
 }
-function Je(e, t) {
+function Ke(e, t) {
+	if (!e && !t) return;
+	if (e && !t) return e;
+	if (!e && t) return t;
+	let n = e, r = t, i = Array.from(/* @__PURE__ */ new Set([...n.issues, ...r.issues])), a = n.passed && r.passed;
+	return {
+		passed: a,
+		overallScore: Math.min(n.overallScore, r.overallScore),
+		sharpnessScore: Math.min(n.sharpnessScore, r.sharpnessScore),
+		isSharp: n.isSharp && r.isSharp,
+		glareRatio: Math.max(n.glareRatio, r.glareRatio),
+		hasGlare: n.hasGlare || r.hasGlare,
+		meanBrightness: Math.round((n.meanBrightness + r.meanBrightness) / 2),
+		exposureStatus: n.exposureStatus === "ok" ? r.exposureStatus : n.exposureStatus,
+		documentDetected: n.documentDetected && r.documentDetected,
+		detectedCorners: r.detectedCorners ?? n.detectedCorners,
+		stabilityScore: Math.min(n.stabilityScore, r.stabilityScore),
+		isStable: n.isStable && r.isStable,
+		motionDelta: Math.max(n.motionDelta, r.motionDelta),
+		issues: i,
+		guidance: a ? n.guidance : n.passed ? r.guidance : n.guidance
+	};
+}
+function qe(e, t) {
 	let n = e.mrz !== null, r = t.mrz !== null, i = "front+back";
 	n && r ? i = "both_mrz" : n && !r ? i = "swapped_detected" : !n && !r && (i = "visual_only");
-	let a = Ge(t.mrz) >= Ge(e.mrz) ? t.mrz : e.mrz, o = Ge(t.mrz) >= Ge(e.mrz) ? t.rawMrzText || e.rawMrzText : e.rawMrzText || t.rawMrzText, s = n ? null : e, c = r ? null : t, l = {}, u = [], d = Ue(e.documentNumber), f = Ue(t.documentNumber);
+	let a = Ue(t.mrz) >= Ue(e.mrz) ? t.mrz : e.mrz, o = Ue(t.mrz) >= Ue(e.mrz) ? t.rawMrzText || e.rawMrzText : e.rawMrzText || t.rawMrzText, s = n ? null : e, c = r ? null : t, l = {}, u = [], d = Ve(e.documentNumber), f = Ve(t.documentNumber);
 	if (d && f && d !== f && !d.includes(f) && !f.includes(d) && u.push({
 		field: "documentNumber",
 		frontValue: e.documentNumber,
@@ -1777,7 +1800,7 @@ function Je(e, t) {
 		backValue: t.sex,
 		resolution: a?.sex && a.sex !== "Unspecified" ? `Used MRZ sex (${a.sex})` : `Used front side (${e.sex})`
 	}), e.surname && t.surname) {
-		let n = He(e.surname), r = He(t.surname), i = new Set(n.split(" ").filter((e) => e.length >= 2)), o = r.split(" ").filter((e) => e.length >= 2).some((e) => i.has(e));
+		let n = Be(e.surname), r = Be(t.surname), i = new Set(n.split(" ").filter((e) => e.length >= 2)), o = r.split(" ").filter((e) => e.length >= 2).some((e) => i.has(e));
 		n && r && !o && !n.includes(r) && !r.includes(n) && u.push({
 			field: "surname",
 			frontValue: e.surname,
@@ -1785,23 +1808,23 @@ function Je(e, t) {
 			resolution: a?.surname ? `Used MRZ surname (${a.surname})` : "Used higher-confidence side"
 		});
 	}
-	let p = X(e.issuingCountry, t.issuingCountry, e.confidence, t.confidence, "issuingCountry", l, e.fieldSources.issuingCountry, t.fieldSources.issuingCountry), m = X(e.nationality, t.nationality, e.confidence, t.confidence, "nationality", l, e.fieldSources.nationality, t.fieldSources.nationality), h = Ke(a?.surname, s?.surname ?? (n ? null : e.surname), c?.surname ?? (r ? null : t.surname), "surname", l) ?? X(e.surname, t.surname, e.confidence, t.confidence, "surname", l, e.fieldSources.surname, t.fieldSources.surname), g = Ke(a?.givenNames, s?.givenNames ?? (n ? null : e.givenNames), c?.givenNames ?? (r ? null : t.givenNames), "givenNames", l) ?? X(e.givenNames, t.givenNames, e.confidence, t.confidence, "givenNames", l, e.fieldSources.givenNames, t.fieldSources.givenNames), _ = a?.surnames && a.surnames.length > 0 && h === a.surname ? a.surnames : h ? h.split(/\s+/).filter(Boolean) : [], v = a?.givenNamesList && a.givenNamesList.length > 0 && g === a.givenNames ? a.givenNamesList : g ? g.split(/\s+/).filter(Boolean) : [], y = g || h ? [g, h].filter(Boolean).join(" ") : X(e.fullName, t.fullName, e.confidence, t.confidence, "fullName", l, e.fieldSources.fullName, t.fieldSources.fullName);
+	let p = Q(e.issuingCountry, t.issuingCountry, e.confidence, t.confidence, "issuingCountry", l, e.fieldSources.issuingCountry, t.fieldSources.issuingCountry), m = Q(e.nationality, t.nationality, e.confidence, t.confidence, "nationality", l, e.fieldSources.nationality, t.fieldSources.nationality), h = We(a?.surname, s?.surname ?? (n ? null : e.surname), c?.surname ?? (r ? null : t.surname), "surname", l) ?? Q(e.surname, t.surname, e.confidence, t.confidence, "surname", l, e.fieldSources.surname, t.fieldSources.surname), g = We(a?.givenNames, s?.givenNames ?? (n ? null : e.givenNames), c?.givenNames ?? (r ? null : t.givenNames), "givenNames", l) ?? Q(e.givenNames, t.givenNames, e.confidence, t.confidence, "givenNames", l, e.fieldSources.givenNames, t.fieldSources.givenNames), _ = a?.surnames && a.surnames.length > 0 && h === a.surname ? a.surnames : h ? h.split(/\s+/).filter(Boolean) : [], v = a?.givenNamesList && a.givenNamesList.length > 0 && g === a.givenNames ? a.givenNamesList : g ? g.split(/\s+/).filter(Boolean) : [], y = g || h ? [g, h].filter(Boolean).join(" ") : Q(e.fullName, t.fullName, e.confidence, t.confidence, "fullName", l, e.fieldSources.fullName, t.fieldSources.fullName);
 	y && !l.fullName && (l.fullName = l.givenNames === "MRZ+VIZ" || l.surname === "MRZ+VIZ" ? "MRZ+VIZ" : l.givenNames ?? l.surname ?? "VIZ");
-	let b = a?.documentNumber ? (l.documentNumber = e.documentNumber && t.documentNumber ? "MRZ+VIZ" : "MRZ", a.documentNumber) : X(e.documentNumber, t.documentNumber, e.confidence, t.confidence, "documentNumber", l, e.fieldSources.documentNumber, t.fieldSources.documentNumber), x = X(e.personalNumber, t.personalNumber, e.confidence, t.confidence, "personalNumber", l, e.fieldSources.personalNumber, t.fieldSources.personalNumber), S = a?.dateOfBirth ? (l.dateOfBirth = s?.dateOfBirth || c?.dateOfBirth ? "MRZ+VIZ" : "MRZ", a.dateOfBirth) : X(e.dateOfBirth, t.dateOfBirth, e.confidence, t.confidence, "dateOfBirth", l, e.fieldSources.dateOfBirth, t.fieldSources.dateOfBirth), C = a?.dateOfExpiry ? (l.dateOfExpiry = s?.dateOfExpiry || c?.dateOfExpiry ? "MRZ+VIZ" : "MRZ", a.dateOfExpiry) : X(e.dateOfExpiry, t.dateOfExpiry, e.confidence, t.confidence, "dateOfExpiry", l, e.fieldSources.dateOfExpiry, t.fieldSources.dateOfExpiry), w = X(e.dateOfIssue, t.dateOfIssue, e.confidence, t.confidence, "dateOfIssue", l, e.fieldSources.dateOfIssue, t.fieldSources.dateOfIssue), T = "Unspecified";
+	let b = a?.documentNumber ? (l.documentNumber = e.documentNumber && t.documentNumber ? "MRZ+VIZ" : "MRZ", a.documentNumber) : Q(e.documentNumber, t.documentNumber, e.confidence, t.confidence, "documentNumber", l, e.fieldSources.documentNumber, t.fieldSources.documentNumber), x = Q(e.personalNumber, t.personalNumber, e.confidence, t.confidence, "personalNumber", l, e.fieldSources.personalNumber, t.fieldSources.personalNumber), S = a?.dateOfBirth ? (l.dateOfBirth = s?.dateOfBirth || c?.dateOfBirth ? "MRZ+VIZ" : "MRZ", a.dateOfBirth) : Q(e.dateOfBirth, t.dateOfBirth, e.confidence, t.confidence, "dateOfBirth", l, e.fieldSources.dateOfBirth, t.fieldSources.dateOfBirth), C = a?.dateOfExpiry ? (l.dateOfExpiry = s?.dateOfExpiry || c?.dateOfExpiry ? "MRZ+VIZ" : "MRZ", a.dateOfExpiry) : Q(e.dateOfExpiry, t.dateOfExpiry, e.confidence, t.confidence, "dateOfExpiry", l, e.fieldSources.dateOfExpiry, t.fieldSources.dateOfExpiry), w = Q(e.dateOfIssue, t.dateOfIssue, e.confidence, t.confidence, "dateOfIssue", l, e.fieldSources.dateOfIssue, t.fieldSources.dateOfIssue), T = "Unspecified";
 	a?.sex && a.sex !== "Unspecified" ? (T = a.sex, l.sex = s?.sex || c?.sex ? "MRZ+VIZ" : "MRZ") : e.sex !== "Unspecified" && t.sex !== "Unspecified" ? (T = e.confidence >= t.confidence ? e.sex : t.sex, l.sex = "VIZ") : e.sex === "Unspecified" ? t.sex !== "Unspecified" && (T = t.sex, l.sex = t.fieldSources.sex ?? "VIZ") : (T = e.sex, l.sex = e.fieldSources.sex ?? "VIZ");
-	let E = X(e.placeOfBirth, t.placeOfBirth, e.confidence, t.confidence, "placeOfBirth", l, e.fieldSources.placeOfBirth, t.fieldSources.placeOfBirth), D = X(e.address, t.address, e.confidence, t.confidence, "address", l, e.fieldSources.address, t.fieldSources.address), O = X(e.parents, t.parents, e.confidence, t.confidence, "parents", l, e.fieldSources.parents, t.fieldSources.parents), k = X(e.issuingAuthority, t.issuingAuthority, e.confidence, t.confidence, "issuingAuthority", l, e.fieldSources.issuingAuthority, t.fieldSources.issuingAuthority), A = X(e.licenseClass, t.licenseClass, e.confidence, t.confidence, "licenseClass", l, e.fieldSources.licenseClass, t.fieldSources.licenseClass), j = X(e.restrictions, t.restrictions, e.confidence, t.confidence, "restrictions", l, e.fieldSources.restrictions, t.fieldSources.restrictions), M = X(e.endorsements, t.endorsements, e.confidence, t.confidence, "endorsements", l, e.fieldSources.endorsements, t.fieldSources.endorsements), N = X(e.height, t.height, e.confidence, t.confidence, "height", l, e.fieldSources.height, t.fieldSources.height), P = X(e.eyeColor, t.eyeColor, e.confidence, t.confidence, "eyeColor", l, e.fieldSources.eyeColor, t.fieldSources.eyeColor), F = X(e.hairColor, t.hairColor, e.confidence, t.confidence, "hairColor", l, e.fieldSources.hairColor, t.fieldSources.hairColor), I = Be(S);
+	let E = Q(e.placeOfBirth, t.placeOfBirth, e.confidence, t.confidence, "placeOfBirth", l, e.fieldSources.placeOfBirth, t.fieldSources.placeOfBirth), D = Q(e.address, t.address, e.confidence, t.confidence, "address", l, e.fieldSources.address, t.fieldSources.address), O = Q(e.parents, t.parents, e.confidence, t.confidence, "parents", l, e.fieldSources.parents, t.fieldSources.parents), k = Q(e.issuingAuthority, t.issuingAuthority, e.confidence, t.confidence, "issuingAuthority", l, e.fieldSources.issuingAuthority, t.fieldSources.issuingAuthority), A = Q(e.licenseClass, t.licenseClass, e.confidence, t.confidence, "licenseClass", l, e.fieldSources.licenseClass, t.fieldSources.licenseClass), j = Q(e.restrictions, t.restrictions, e.confidence, t.confidence, "restrictions", l, e.fieldSources.restrictions, t.fieldSources.restrictions), M = Q(e.endorsements, t.endorsements, e.confidence, t.confidence, "endorsements", l, e.fieldSources.endorsements, t.fieldSources.endorsements), N = Q(e.height, t.height, e.confidence, t.confidence, "height", l, e.fieldSources.height, t.fieldSources.height), P = Q(e.eyeColor, t.eyeColor, e.confidence, t.confidence, "eyeColor", l, e.fieldSources.eyeColor, t.fieldSources.eyeColor), F = Q(e.hairColor, t.hairColor, e.confidence, t.confidence, "hairColor", l, e.fieldSources.hairColor, t.fieldSources.hairColor), I = Re(S);
 	I !== null && (l.age = "COMPUTED");
-	let L = Ve(C);
+	let L = ze(C);
 	L !== null && (l.isExpired = "COMPUTED");
 	let R = {
 		...e.unmappedFields,
 		...t.unmappedFields
 	}, z = [e.rawOcrText ? `--- FRONT SIDE ---\n${e.rawOcrText}` : "", t.rawOcrText ? `--- BACK SIDE ---\n${t.rawOcrText}` : ""].filter(Boolean).join("\n\n"), B = Math.round((e.confidence + t.confidence) / 2), V = e.processingTimeMs + t.processingTimeMs;
 	return {
-		documentType: qe(e, t),
+		documentType: Ge(e, t),
 		documentFormat: a ? a.format : "VISUAL_ONLY",
 		issuingCountry: p,
-		issuingCountryName: ue(p),
+		issuingCountryName: se(p),
 		documentNumber: b,
 		personalNumber: x,
 		surname: h,
@@ -1810,7 +1833,7 @@ function Je(e, t) {
 		givenNamesList: v,
 		fullName: y,
 		nationality: m,
-		nationalityName: ue(m) ?? m,
+		nationalityName: se(m) ?? m,
 		dateOfBirth: S,
 		age: I,
 		sex: T,
@@ -1828,6 +1851,7 @@ function Je(e, t) {
 		eyeColor: P,
 		hairColor: F,
 		mrz: a,
+		mrzModel: a === t.mrz ? t.mrzModel ?? e.mrzModel : e.mrzModel ?? t.mrzModel,
 		unmappedFields: R,
 		fieldSources: l,
 		rawOcrText: z,
@@ -1837,6 +1861,7 @@ function Je(e, t) {
 		sourceDimensions: r ? t.sourceDimensions : e.sourceDimensions,
 		orientation: r ? t.orientation : e.orientation,
 		perspective: r ? t.perspective : e.perspective,
+		quality: Ke(e.quality, t.quality),
 		previews: r ? t.previews ?? e.previews : e.previews ?? t.previews,
 		sides: {
 			front: e,
@@ -1848,10 +1873,10 @@ function Je(e, t) {
 	};
 }
 // src/scanner/perspective.ts
-function Ye(e) {
+function Je(e) {
 	return Math.max(0, Math.min(1, e));
 }
-function Z(e, t) {
+function Ye(e, t) {
 	return Math.hypot(e.x - t.x, e.y - t.y);
 }
 function Xe(e, t, n) {
@@ -1951,7 +1976,7 @@ function nt(e, t) {
 function rt(e, t, n) {
 	let r = n.x - t.x, i = n.y - t.y, a = r * r + i * i;
 	if (a < 1e-9) return {
-		d: Z(e, t),
+		d: Ye(e, t),
 		t: 0
 	};
 	let o = ((e.x - t.x) * r + (e.y - t.y) * i) / a, s = Math.max(0, Math.min(1, o)), c = t.x + s * r, l = t.y + s * i;
@@ -1978,7 +2003,7 @@ function it(e, t, n) {
 	let o = [];
 	for (let e = 0; e < 4; e++) {
 		let t = a[(e + 3) % 4], r = a[e], s = nt(t, r);
-		if (!s || Z(s, i[e]) > n * 4) return i;
+		if (!s || Ye(s, i[e]) > n * 4) return i;
 		o.push(s);
 	}
 	return o;
@@ -2003,7 +2028,40 @@ function at(e) {
 	}
 	return n;
 }
-function ot(e) {
+function ot(e, t, n, r) {
+	let i = 0, a = Infinity, o = !0;
+	for (let r = 0; r < 4; r++) {
+		let s = n[r], c = n[(r + 1) % 4], l = (c.x - s.x) * (t - s.y) - (c.y - s.y) * (e - s.x);
+		if (Math.abs(l) > 1e-5) {
+			let e = l > 0 ? 1 : -1;
+			i === 0 ? i = e : e !== i && (o = !1);
+		}
+		let u = rt({
+			x: e,
+			y: t
+		}, s, c).d;
+		u < a && (a = u);
+	}
+	return o || a <= r;
+}
+function st(e, t, n, r, i) {
+	let a = t.x - e.x, o = t.y - e.y, s = Math.hypot(a, o);
+	if (s < 12) return 0;
+	let c = -o / s, l = a / s, u = Math.min(48, Math.max(18, Math.round(s * .4))), d = 0;
+	for (let t = 0; t < u; t++) {
+		let s = .08 + .84 * t / Math.max(1, u - 1), f = e.x + a * s, p = e.y + o * s, m = 0;
+		for (let e = -3; e <= 3; e += 1) {
+			let t = Math.round(f + c * e), a = Math.round(p + l * e);
+			if (t >= 1 && t < r - 1 && a >= 1 && a < i - 1) {
+				let e = n[a * r + t];
+				e > m && (m = e);
+			}
+		}
+		m >= 8.2 && d++;
+	}
+	return d / u;
+}
+function ct(e) {
 	let t = e instanceof HTMLImageElement && e.naturalWidth || e.width, n = e instanceof HTMLImageElement && e.naturalHeight || e.height;
 	if (t < 64 || n < 64) return null;
 	let r = Math.min(1, 320 / Math.max(t, n)), i = Math.max(32, Math.round(t * r)), a = Math.max(32, Math.round(n * r)), o = document.createElement("canvas");
@@ -2011,167 +2069,244 @@ function ot(e) {
 	let s = o.getContext("2d", { willReadFrequently: !0 });
 	if (!s) return null;
 	s.drawImage(e, 0, 0, i, a);
-	let c = s.getImageData(0, 0, i, a).data, l = i * a, u = new Float32Array(l);
-	for (let e = 0, t = 0; e < c.length; e += 4, t++) u[t] = .299 * c[e] + .587 * c[e + 1] + .114 * c[e + 2];
-	let d = new Float32Array(l);
+	let c = s.getImageData(0, 0, i, a).data, l = i * a, u = new Float32Array(l), d = new Float32Array(l), f = new Float32Array(l), p = new Float32Array(l);
 	for (let e = 0; e < a; e++) for (let t = 0; t < i; t++) {
-		let n = 0, r = 0;
-		for (let o = -1; o <= 1; o++) {
-			let s = e + o;
-			if (!(s < 0 || s >= a)) for (let e = -1; e <= 1; e++) {
+		let n = 0, r = 0, o = 0, s = 0;
+		for (let l = -1; l <= 1; l++) {
+			let u = e + l;
+			if (!(u < 0 || u >= a)) for (let e = -1; e <= 1; e++) {
 				let a = t + e;
-				a < 0 || a >= i || (n += u[s * i + a], r++);
+				if (a < 0 || a >= i) continue;
+				let l = (u * i + a) * 4;
+				n += c[l], r += c[l + 1], o += c[l + 2], s++;
 			}
 		}
-		d[e * i + t] = n / r;
+		let l = e * i + t, m = n / s, h = r / s, g = o / s;
+		u[l] = m, d[l] = h, f[l] = g, p[l] = .299 * m + .587 * h + .114 * g;
 	}
-	let f = new Float32Array(l);
-	for (let e = 1; e < a - 1; e++) for (let t = 1; t < i - 1; t++) {
-		let n = e * i + t, r = -d[(e - 1) * i + (t - 1)] + d[(e - 1) * i + (t + 1)] - 2 * d[e * i + (t - 1)] + 2 * d[e * i + (t + 1)] - d[(e + 1) * i + (t - 1)] + d[(e + 1) * i + (t + 1)], a = -d[(e - 1) * i + (t - 1)] - 2 * d[(e - 1) * i + t] - d[(e - 1) * i + (t + 1)] + d[(e + 1) * i + (t - 1)] + 2 * d[(e + 1) * i + t] + d[(e + 1) * i + (t + 1)];
-		f[n] = Math.hypot(r, a) * .25;
-	}
-	let p = [];
-	for (let e = 2; e < i - 2; e += 2) {
-		p.push({
-			r: c[(2 * i + e) * 4],
-			g: c[(2 * i + e) * 4 + 1],
-			b: c[(2 * i + e) * 4 + 2],
-			grad: f[2 * i + e],
-			idx: 2 * i + e
-		});
-		let t = (a - 3) * i + e;
-		p.push({
-			r: c[t * 4],
-			g: c[t * 4 + 1],
-			b: c[t * 4 + 2],
-			grad: f[t],
-			idx: t
-		});
-	}
-	for (let e = 2; e < a - 2; e += 2) {
-		let t = e * i + 2;
-		p.push({
-			r: c[t * 4],
-			g: c[t * 4 + 1],
-			b: c[t * 4 + 2],
-			grad: f[t],
-			idx: t
-		});
-		let n = e * i + (i - 3);
-		p.push({
-			r: c[n * 4],
-			g: c[n * 4 + 1],
-			b: c[n * 4 + 2],
-			grad: f[n],
-			idx: n
-		});
-	}
-	let m = p.filter((e) => e.grad < 10);
-	if (m.length < p.length * .4) return null;
-	let h = m.map((e) => e.r).sort((e, t) => e - t), g = m.map((e) => e.g).sort((e, t) => e - t), _ = m.map((e) => e.b).sort((e, t) => e - t), v = h[Math.floor(h.length / 2)], y = g[Math.floor(g.length / 2)], b = _[Math.floor(_.length / 2)], x = new Uint8Array(l), S = new Int32Array(l), C = 0, w = 0, T = (e) => {
-		let t = e * 4;
-		return Math.max(Math.abs(c[t] - v), Math.abs(c[t + 1] - y), Math.abs(c[t + 2] - b));
-	}, E = (e) => {
-		x[e] || f[e] < 12 && T(e) < 42 && (x[e] = 1, S[w++] = e);
+	let m = new Float32Array(l), h = new Float32Array(l), g = new Float32Array(l), _ = (e, t, n, r, i) => {
+		let a = -e[t + i - 1] + e[t + i + 1] - 2 * e[n + i - 1] + 2 * e[n + i + 1] - e[r + i - 1] + e[r + i + 1], o = -e[t + i - 1] - 2 * e[t + i] - e[t + i + 1] + e[r + i - 1] + 2 * e[r + i] + e[r + i + 1];
+		return Math.hypot(a, o) * .25;
 	};
-	for (let e = 0; e < i; e++) E(e), E((a - 1) * i + e);
-	for (let e = 0; e < a; e++) E(e * i), E(e * i + (i - 1));
-	if (w === 0) return null;
-	for (; C < w;) {
-		let e = S[C++], t = e % i, n = e / i | 0, r = e * 4, o = c[r], s = c[r + 1], l = c[r + 2], u = [
+	for (let e = 1; e < a - 1; e++) {
+		let t = (e - 1) * i, n = e * i, r = (e + 1) * i;
+		for (let e = 1; e < i - 1; e++) {
+			let i = n + e, a = _(p, t, n, r, e), o = _(u, t, n, r, e), s = _(d, t, n, r, e), l = _(f, t, n, r, e), v = Math.max(a, o, s, l), y = 0, b = (t + e - 1) * 4, x = (t + e) * 4, S = (t + e + 1) * 4, C = (n + e - 1) * 4, w = (n + e + 1) * 4, T = (r + e - 1) * 4, E = (r + e) * 4, D = (r + e + 1) * 4;
+			for (let e = 0; e < 3; e++) {
+				let t = -c[b + e] + c[S + e] - 2 * c[C + e] + 2 * c[w + e] - c[T + e] + c[D + e], n = -c[b + e] - 2 * c[x + e] - c[S + e] + c[T + e] + 2 * c[E + e] + c[D + e], r = Math.hypot(t, n) * .25;
+				r > y && (y = r);
+			}
+			m[i] = a, h[i] = v, g[i] = Math.max(v, y * .72);
+		}
+	}
+	let v = [], y = (e, t) => {
+		v.push({
+			r: u[e],
+			g: d[e],
+			b: f[e],
+			grad: m[e],
+			side: t
+		});
+	};
+	for (let e = 2; e < i - 2; e += 2) y(2 * i + e, 0), y((a - 3) * i + e, 2);
+	for (let e = 2; e < a - 2; e += 2) y(e * i + (i - 3), 1), y(e * i + 2, 3);
+	let b = v.filter((e) => e.grad < 10.5);
+	if (b.length < v.length * .45) return null;
+	let x = b.map((e) => e.r).sort((e, t) => e - t), S = b.map((e) => e.g).sort((e, t) => e - t), C = b.map((e) => e.b).sort((e, t) => e - t), w = x[Math.floor(x.length / 2)], T = S[Math.floor(S.length / 2)], E = C[Math.floor(C.length / 2)], D = [
+		0,
+		0,
+		0,
+		0
+	], O = [
+		0,
+		0,
+		0,
+		0
+	], k = 0;
+	for (let e of v) {
+		D[e.side]++;
+		let t = Math.max(Math.abs(e.r - w), Math.abs(e.g - T), Math.abs(e.b - E));
+		e.grad < 12 && t < 44 && (O[e.side]++, k++);
+	}
+	let A = D.map((e, t) => e > 0 ? O[t] / e : 0), j = A.filter((e) => e >= .45).length, M = A.filter((e) => e >= .65).length, N = k / Math.max(1, v.length);
+	if (j < 3 || M < 2 && N < .68) return null;
+	let P = new Uint8Array(l);
+	for (let e = 0; e < l; e++) g[e] >= 9.5 && (P[e] = 1);
+	let F = new Uint8Array(P);
+	for (let e = 1; e < a - 1; e++) {
+		let t = (e - 1) * i, n = e * i, r = (e + 1) * i;
+		for (let e = 1; e < i - 1; e++) {
+			let i = n + e;
+			F[i] || g[i] < 6.5 || P[t + e - 1] + P[t + e] + P[t + e + 1] + P[n + e - 1] + P[n + e + 1] + P[r + e - 1] + P[r + e] + P[r + e + 1] >= 2 && (F[i] = 1);
+		}
+	}
+	let I = new Uint8Array(l), L = new Int32Array(l), R = 0, z = 0, B = (e) => Math.max(Math.abs(u[e] - w), Math.abs(d[e] - T), Math.abs(f[e] - E)), V = (e) => {
+		I[e] || F[e] || g[e] < 10.5 && B(e) < 42 && (I[e] = 1, L[z++] = e);
+	};
+	for (let e = 0; e < i; e++) V(e), V((a - 1) * i + e);
+	for (let e = 0; e < a; e++) V(e * i), V(e * i + (i - 1));
+	if (z === 0) return null;
+	for (; R < z;) {
+		let e = L[R++], t = e % i, n = e / i | 0, r = u[e], o = d[e], s = f[e], c = [
 			t > 0 ? e - 1 : -1,
 			t < i - 1 ? e + 1 : -1,
 			n > 0 ? e - i : -1,
 			n < a - 1 ? e + i : -1
 		];
 		for (let e = 0; e < 4; e++) {
-			let t = u[e];
-			if (t < 0 || x[t] || f[t] >= 13.5) continue;
-			let n = t * 4;
-			Math.max(Math.abs(c[n] - o), Math.abs(c[n + 1] - s), Math.abs(c[n + 2] - l)) > 18 || T(t) > 46 || (x[t] = 1, S[w++] = t);
+			let t = c[e];
+			t < 0 || I[t] || F[t] || Math.max(Math.abs(u[t] - r), Math.abs(d[t] - o), Math.abs(f[t] - s)) > 14 || B(t) > 46 || (I[t] = 1, L[z++] = t);
 		}
 	}
-	let D = new Uint8Array(l), O = new Int32Array(l), k = [];
+	let H = new Uint8Array(l), U = new Int32Array(l), W = [];
 	for (let e = 0; e < l; e++) {
-		if (x[e] || D[e]) continue;
+		if (I[e] || H[e]) continue;
 		let t = 0, n = 0;
-		D[e] = 1, O[n++] = e;
+		H[e] = 1, U[n++] = e;
 		let r = [];
 		for (; t < n;) {
-			let e = O[t++];
+			let e = U[t++];
 			r.push(e);
 			let o = e % i, s = e / i | 0;
-			o > 0 && !x[e - 1] && !D[e - 1] && (D[e - 1] = 1, O[n++] = e - 1), o < i - 1 && !x[e + 1] && !D[e + 1] && (D[e + 1] = 1, O[n++] = e + 1), s > 0 && !x[e - i] && !D[e - i] && (D[e - i] = 1, O[n++] = e - i), s < a - 1 && !x[e + i] && !D[e + i] && (D[e + i] = 1, O[n++] = e + i);
+			o > 0 && !I[e - 1] && !H[e - 1] && (H[e - 1] = 1, U[n++] = e - 1), o < i - 1 && !I[e + 1] && !H[e + 1] && (H[e + 1] = 1, U[n++] = e + 1), s > 0 && !I[e - i] && !H[e - i] && (H[e - i] = 1, U[n++] = e - i), s < a - 1 && !I[e + i] && !H[e + i] && (H[e + i] = 1, U[n++] = e + i);
 		}
-		r.length > k.length && (k = r);
+		r.length > W.length && (W = r);
 	}
-	let A = k.length / l;
-	if (A < .14 || A > .94) return null;
-	let j = new Uint8Array(l);
-	for (let e = 0; e < k.length; e++) j[k[e]] = 1;
-	let M = [];
-	for (let e = 0; e < k.length; e++) {
-		let t = k[e], n = t % i, r = t / i | 0;
-		n !== 0 && n !== i - 1 && r !== 0 && r !== a - 1 && j[t - 1] && j[t + 1] && j[t - i] && j[t + i] || M.push({
+	let ee = W.length / l;
+	if (ee < .14 || ee > .93) return null;
+	let te = new Uint8Array(l);
+	for (let e = 0; e < W.length; e++) te[W[e]] = 1;
+	let ne = [];
+	for (let e = 0; e < W.length; e++) {
+		let t = W[e], n = t % i, r = t / i | 0;
+		n !== 0 && n !== i - 1 && r !== 0 && r !== a - 1 && te[t - 1] && te[t + 1] && te[t - i] && te[t + i] || ne.push({
 			x: n,
 			y: r
 		});
 	}
-	if (M.length < 24) return null;
-	let N = $e(M);
-	if (N.length < 4) return null;
-	let P = Qe(it(et(N), M, Math.max(4, Math.min(i, a) * .035)).map((e) => ({
-		x: Ye(e.x / i),
-		y: Ye(e.y / a)
+	if (ne.length < 24) return null;
+	let re = $e(ne);
+	if (re.length < 4) return null;
+	let G = Qe(it(et(re), ne, Math.max(4, Math.min(i, a) * .035)).map((e) => ({
+		x: Je(e.x / i),
+		y: Je(e.y / a)
 	})));
-	if (at(P).some((e) => e < 46 || e > 134)) return null;
-	let F = Ze([
-		P.topLeft,
-		P.topRight,
-		P.bottomRight,
-		P.bottomLeft
+	if (at(G).some((e) => e < 46 || e > 134)) return null;
+	let K = Ze([
+		G.topLeft,
+		G.topRight,
+		G.bottomRight,
+		G.bottomLeft
 	]);
-	if (F < .14 || F > .95) return null;
-	let I = Z({
-		x: P.topLeft.x * t,
-		y: P.topLeft.y * n
+	if (K < .14 || K > .93) return null;
+	let ie = .028, ae = (e) => e.y <= ie, q = (e) => e.x >= .972, oe = (e) => e.y >= .972, se = (e) => e.x <= ie, ce = [
+		ae(G.topLeft) && ae(G.topRight),
+		q(G.topRight) && q(G.bottomRight),
+		oe(G.bottomRight) && oe(G.bottomLeft),
+		se(G.bottomLeft) && se(G.topLeft)
+	], le = ce.filter(Boolean).length, ue = [
+		G.topLeft,
+		G.topRight,
+		G.bottomRight,
+		G.bottomLeft
+	].filter((e) => e.x > .028 && e.x < .972 && e.y > .028 && e.y < .972).length;
+	if (le >= 2 || ue < 2) return null;
+	let de = [
+		{
+			x: G.topLeft.x * i,
+			y: G.topLeft.y * a
+		},
+		{
+			x: G.topRight.x * i,
+			y: G.topRight.y * a
+		},
+		{
+			x: G.bottomRight.x * i,
+			y: G.bottomRight.y * a
+		},
+		{
+			x: G.bottomLeft.x * i,
+			y: G.bottomLeft.y * a
+		}
+	], J = [];
+	for (let e = 0; e < 4; e++) {
+		if (ce[e]) continue;
+		let t = st(de[e], de[(e + 1) % 4], g, i, a);
+		J.push(t);
+	}
+	if (J.length > 0) {
+		let e = Math.min(...J), t = J.reduce((e, t) => e + t, 0) / J.length;
+		if (e < .42 || t < .56) return null;
+	}
+	let fe = 3.5, pe = new Uint8Array(l), me = .299 * w + .587 * T + .114 * E, he = 0, ge = 0, _e = 0, ve = 0;
+	for (let e = 1; e < a - 1; e++) {
+		let t = e * i;
+		for (let n = 1; n < i - 1; n++) {
+			let r = t + n;
+			if (ot(n, e, de, fe)) continue;
+			he++;
+			let o = h[r], s = B(r), c = me - p[r];
+			if (o >= 14 && s >= 24 && ge++, c >= 38 && o >= 10 && _e++, !I[r] && !pe[r]) {
+				let e = 0, t = 0;
+				pe[r] = 1, U[t++] = r;
+				let n = 0;
+				for (; e < t;) {
+					let r = U[e++];
+					(h[r] >= 10 || B(r) >= 32) && n++;
+					let o = r % i, s = r / i | 0, c = [
+						o > 1 ? r - 1 : -1,
+						o < i - 2 ? r + 1 : -1,
+						s > 1 ? r - i : -1,
+						s < a - 2 ? r + i : -1
+					];
+					for (let e = 0; e < 4; e++) {
+						let n = c[e];
+						n >= 0 && !I[n] && !pe[n] && !ot(n % i, n / i | 0, de, fe) && (pe[n] = 1, U[t++] = n);
+					}
+				}
+				t >= 3 && n >= 3 && ve++;
+			}
+		}
+	}
+	if (he > 0) {
+		let e = ge / he;
+		if (ve >= 7 || _e >= Math.max(24, Math.round(l * .0025)) || e > .015 || ge > Math.max(48, Math.round(l * .0055))) return null;
+	}
+	let Y = Ye({
+		x: G.topLeft.x * t,
+		y: G.topLeft.y * n
 	}, {
-		x: P.topRight.x * t,
-		y: P.topRight.y * n
-	}), L = Z({
-		x: P.bottomLeft.x * t,
-		y: P.bottomLeft.y * n
+		x: G.topRight.x * t,
+		y: G.topRight.y * n
+	}), X = Ye({
+		x: G.bottomLeft.x * t,
+		y: G.bottomLeft.y * n
 	}, {
-		x: P.bottomRight.x * t,
-		y: P.bottomRight.y * n
-	}), R = Z({
-		x: P.topLeft.x * t,
-		y: P.topLeft.y * n
+		x: G.bottomRight.x * t,
+		y: G.bottomRight.y * n
+	}), ye = Ye({
+		x: G.topLeft.x * t,
+		y: G.topLeft.y * n
 	}, {
-		x: P.bottomLeft.x * t,
-		y: P.bottomLeft.y * n
-	}), z = Z({
-		x: P.topRight.x * t,
-		y: P.topRight.y * n
+		x: G.bottomLeft.x * t,
+		y: G.bottomLeft.y * n
+	}), be = Ye({
+		x: G.topRight.x * t,
+		y: G.topRight.y * n
 	}, {
-		x: P.bottomRight.x * t,
-		y: P.bottomRight.y * n
-	}), B = Math.max(I, L), V = Math.max(R, z), ee = B / Math.max(1, V);
-	if (ee < .42 || ee > 2.45) return null;
-	let te = Math.atan2((P.topRight.y - P.topLeft.y) * n, (P.topRight.x - P.topLeft.x) * t), ne = Math.atan2((P.bottomRight.y - P.bottomLeft.y) * n, (P.bottomRight.x - P.bottomLeft.x) * t), re = Math.atan2((P.bottomLeft.y - P.topLeft.y) * n, (P.bottomLeft.x - P.topLeft.x) * t), ie = Math.atan2((P.bottomRight.y - P.topRight.y) * n, (P.bottomRight.x - P.topRight.x) * t), H = 180 / Math.PI, ae = Math.max(Math.abs((te - ne) * H), Math.abs((re - ie) * H)), oe = Math.max(Math.abs(I - L) / Math.max(1, B), Math.abs(R - z) / Math.max(1, V)), se = Math.max(Math.abs(te * H), Math.abs(ne * H)), ce = [
-		P.topLeft,
-		P.topRight,
-		P.bottomRight,
-		P.bottomLeft
-	].filter((e) => e.x > .03 && e.x < .97 && e.y > .03 && e.y < .97).length;
-	return !(ae >= 1.8 || oe >= .04 || se >= 2.2) && !(F <= .86 && ce >= 3) ? null : {
+		x: G.bottomRight.x * t,
+		y: G.bottomRight.y * n
+	}), xe = Math.max(Y, X), Se = Math.max(ye, be), Ce = xe / Math.max(1, Se);
+	if (Ce < .42 || Ce > 2.45) return null;
+	let we = Math.atan2((G.topRight.y - G.topLeft.y) * n, (G.topRight.x - G.topLeft.x) * t), Te = Math.atan2((G.bottomRight.y - G.bottomLeft.y) * n, (G.bottomRight.x - G.bottomLeft.x) * t), Ee = Math.atan2((G.bottomLeft.y - G.topLeft.y) * n, (G.bottomLeft.x - G.topLeft.x) * t), De = Math.atan2((G.bottomRight.y - G.topRight.y) * n, (G.bottomRight.x - G.topRight.x) * t), Z = 180 / Math.PI, Oe = Math.max(Math.abs((we - Te) * Z), Math.abs((Ee - De) * Z)), ke = Math.max(Math.abs(Y - X) / Math.max(1, xe), Math.abs(ye - be) / Math.max(1, Se)), Ae = Math.max(Math.abs(we * Z), Math.abs(Te * Z));
+	return !(Oe >= 1.8 || ke >= .04 || Ae >= 2.2) && !(K <= .88 && ue >= 3) ? null : {
 		applied: !0,
 		autoDetected: !0,
-		corners: P,
-		sourceQuadAreaRatio: Math.round(F * 1e3) / 1e3
+		corners: G,
+		sourceQuadAreaRatio: Math.round(K * 1e3) / 1e3
 	};
 }
-function st(e, t) {
+function lt(e, t) {
 	let n = [], r = [];
 	for (let i = 0; i < 4; i++) {
 		let a = t[i].x, o = t[i].y, s = e[i].x, c = e[i].y;
@@ -2219,7 +2354,7 @@ function st(e, t) {
 	}
 	return i[8] = 1, i;
 }
-function ct(e, t) {
+function ut(e, t) {
 	let n = e instanceof HTMLImageElement && e.naturalWidth || e.width, r = e instanceof HTMLImageElement && e.naturalHeight || e.height, i = Math.min(1, 2400 / Math.max(1, n, r)), a = Math.max(1, Math.round(n * i)), o = Math.max(1, Math.round(r * i)), s = document.createElement("canvas");
 	s.width = a, s.height = o;
 	let c = s.getContext("2d", { willReadFrequently: !0 });
@@ -2237,9 +2372,9 @@ function ct(e, t) {
 	}, p = {
 		x: t.bottomLeft.x * a,
 		y: t.bottomLeft.y * o
-	}, m = Z(u, d), h = Z(p, f), g = Z(u, p), _ = Z(d, f), v = Math.max(64, Math.round(Math.max(m, h))), y = Math.max(64, Math.round(Math.max(g, _))), b = 1;
+	}, m = Ye(u, d), h = Ye(p, f), g = Ye(u, p), _ = Ye(d, f), v = Math.max(64, Math.round(Math.max(m, h))), y = Math.max(64, Math.round(Math.max(g, _))), b = 1;
 	v < 1500 ? b = Math.min(2.6, 1750 / v) : v > 2100 && (b = 2100 / v);
-	let x = Math.max(64, Math.round(v * b)), S = Math.max(64, Math.round(y * b)), C = st([
+	let x = Math.max(64, Math.round(v * b)), S = Math.max(64, Math.round(y * b)), C = lt([
 		u,
 		d,
 		f,
@@ -2277,8 +2412,217 @@ function ct(e, t) {
 	}
 	return T.putImageData(E, 0, 0), w;
 }
+// src/scanner/qualityGate.ts
+var dt = class extends Error {
+	constructor(e) {
+		super(`Image quality gate failed: ${e.guidance}`), this.name = "QualityGateError", this.report = e;
+	}
+}, ft = 32, pt = 24;
+function mt(e) {
+	return typeof HTMLVideoElement < "u" && e instanceof HTMLVideoElement;
+}
+function ht(e, t, n) {
+	let r = /* @__PURE__ */ new Uint8Array(768), i = Math.floor(t * .1), a = Math.floor(n * .12), o = Math.max(1, Math.floor(t * .8)), s = Math.max(1, Math.floor(n * .76));
+	for (let c = 0; c < pt; c++) {
+		let l = Math.min(n - 1, a + Math.floor((c + .5) / pt * s));
+		for (let n = 0; n < ft; n++) {
+			let a = Math.min(t - 1, i + Math.floor((n + .5) / ft * o));
+			r[c * ft + n] = e[l * t + a];
+		}
+	}
+	return r;
+}
+function gt(e, t) {
+	return e.length === 0 ? t ? "Crisp, glare-free frame ready" : "Image quality acceptable" : e.includes("no_document") ? "Position passport or ID card inside the frame" : e.includes("too_dark") ? "Too dark — move to brighter, even lighting" : e.includes("too_bright") ? "Overexposed — reduce direct light on document" : e.includes("glare_detected") ? "Glare hotspot detected — tilt card or avoid direct reflections" : e.includes("camera_moving") ? "Hold steady — stabilizing frame…" : e.includes("too_blurry") ? "Image looks blurry — hold steady or adjust distance to focus" : "Adjust framing and lighting";
+}
+function _t(e, t, n = {}, r) {
+	let { minSharpness: i = 34, maxGlareRatio: a = .045, minBrightness: o = 48, maxBrightness: s = 242, requireDocument: c = !0, maxMotionDelta: l = 5.5 } = n, u = Math.max(1, e.width), d = Math.max(1, e.height), f = Math.min(1, 360 / Math.max(u, d)), p = Math.max(32, Math.round(u * f)), m = Math.max(32, Math.round(d * f)), h = f === 1 ? e : (() => {
+		let t = document.createElement("canvas");
+		t.width = p, t.height = m;
+		let n = t.getContext("2d", { willReadFrequently: !0 });
+		return n && (n.imageSmoothingEnabled = !0, n.imageSmoothingQuality = "medium", n.drawImage(e, 0, 0, p, m)), t;
+	})(), g = h.getContext("2d", { willReadFrequently: !0 });
+	if (!g) throw Error("2D canvas context unavailable for quality assessment");
+	let _ = g.getImageData(0, 0, p, m).data, v = p * m, y = new Uint8ClampedArray(v);
+	for (let e = 0, t = 0; e < _.length; e += 4, t++) y[t] = Math.round(.299 * _[e] + .587 * _[e + 1] + .114 * _[e + 2]);
+	let b = ht(y, p, m), x = Math.max(1, Math.floor(p * .1)), S = Math.min(p - 2, Math.ceil(p * .9)), C = Math.max(1, Math.floor(m * .12)), w = Math.min(m - 2, Math.ceil(m * .88)), T = Math.max(8, S - x), E = Math.max(8, w - C), D = T * E, O = /* @__PURE__ */ new Uint32Array(256), k = 0, A = 0, j = 0, M = /* @__PURE__ */ new Float64Array(48), N = /* @__PURE__ */ new Float64Array(48), P = /* @__PURE__ */ new Float64Array(48), F = /* @__PURE__ */ new Uint32Array(48);
+	for (let e = C; e < w; e++) {
+		let t = Math.min(5, Math.floor((e - C) / E * 6)), n = e * p;
+		for (let e = x; e < S; e++) {
+			let r = n + e, i = y[r];
+			k += i, O[i]++;
+			let a = r * 4, o = _[a], s = _[a + 1], c = _[a + 2], l = Math.min(o, s, c);
+			l >= 248 && Math.max(o, s, c) - l <= 10 && j++;
+			let u = Math.abs(4 * i - y[r - 1] - y[r + 1] - y[r - p] - y[r + p]), d = (Math.abs(y[r + 1] - y[r - 1]) + Math.abs(y[r + p] - y[r - p])) * .5;
+			d >= 16 && A++;
+			let f = Math.min(7, Math.floor((e - x) / T * 8)), m = t * 8 + f;
+			M[m] += u, N[m] += u * u, P[m] += d, F[m]++;
+		}
+	}
+	let I = Math.round(k / Math.max(1, D)), L = 0, R = 128, z = 255, B = 0, V = !1, H = !1;
+	for (let e = 0; e < 256; e++) if (B += O[e], !V && B >= D * .1 && (L = e, V = !0), !H && B >= D * .6 && (R = e, H = !0), B >= D * .95) {
+		z = e;
+		break;
+	}
+	let U = z - L, W = [];
+	for (let e = 0; e < 48; e++) {
+		let t = F[e];
+		if (t < 8) continue;
+		let n = M[e] / t, r = Math.max(0, N[e] / t - n * n), i = P[e] / t, a = Math.sqrt(r) * .72 + i * 1.15;
+		W.push(a);
+	}
+	W.sort((e, t) => t - e);
+	let ee = Math.max(1, Math.ceil(W.length * .25)), te = 0;
+	for (let e = 0; e < ee; e++) te += W[e] ?? 0;
+	let ne = te / ee, re = Math.max(0, Math.min(100, Math.round((ne - 2) / 30 * 100))), G = re >= i, K = j / Math.max(1, D), ie = R < 236 ? Math.round(K * 1e3) / 1e3 : Math.round(Math.max(0, K - .55) * 1e3) / 1e3, ae = R < 236 && K > a && K < .78, q = "ok";
+	I < o ? q = "too_dark" : I > s && U < 70 && (q = "too_bright");
+	let oe = null;
+	if (r?.detectQuad !== !1) {
+		let e = ct(h);
+		e && e.sourceQuadAreaRatio >= .2 && (oe = e.corners);
+	}
+	let se = A / Math.max(1, D), ce = oe !== null || se >= .015 && U >= 40, le = 0, ue = !0, de = 100;
+	if (t && t.length === b.length) {
+		let e = 0;
+		for (let n = 0; n < b.length; n++) e += Math.abs(b[n] - t[n]);
+		le = Math.round(e / b.length * 10) / 10, ue = le <= l, de = Math.max(0, Math.min(100, Math.round(100 - le / (l * 2.5) * 100)));
+	}
+	let J = [];
+	c && !ce && J.push("no_document"), q === "too_dark" ? J.push("too_dark") : q === "too_bright" && J.push("too_bright"), ae && J.push("glare_detected"), G || J.push("too_blurry"), ue || J.push("camera_moving");
+	let fe = Math.max(0, Math.min(100, Math.round((1 - ie * 6) * 100))), pe = q === "ok" ? Math.max(40, Math.min(100, Math.round(100 - Math.abs(I - 148) * .4))) : 20, me = Math.max(0, Math.min(100, Math.round(re * .48 + fe * .22 + pe * .15 + de * .15))), he = J.length === 0, ge = gt(J, ce);
+	return {
+		report: {
+			passed: he,
+			overallScore: me,
+			sharpnessScore: re,
+			isSharp: G,
+			glareRatio: ie,
+			hasGlare: ae,
+			meanBrightness: I,
+			exposureStatus: q,
+			documentDetected: ce,
+			detectedCorners: oe,
+			stabilityScore: de,
+			isStable: ue,
+			motionDelta: le,
+			issues: J,
+			guidance: ge
+		},
+		signature: b
+	};
+}
+async function vt(e, t = {}) {
+	if (e instanceof HTMLCanvasElement) return _t(e, null, t).report;
+	let n;
+	if (mt(e)) {
+		let t = Math.max(1, e.videoWidth || e.clientWidth), r = Math.max(1, e.videoHeight || e.clientHeight), i = Math.min(1, 480 / Math.max(t, r));
+		n = document.createElement("canvas"), n.width = Math.max(1, Math.round(t * i)), n.height = Math.max(1, Math.round(r * i));
+		let a = n.getContext("2d", { willReadFrequently: !0 });
+		if (!a) throw Error("2D canvas context unavailable");
+		a.drawImage(e, 0, 0, n.width, n.height);
+	} else {
+		let t = await ce(e), r = Math.max(1, t.naturalWidth || t.width), i = Math.max(1, t.naturalHeight || t.height), a = Math.min(1, 480 / Math.max(r, i));
+		n = document.createElement("canvas"), n.width = Math.max(1, Math.round(r * a)), n.height = Math.max(1, Math.round(i * a));
+		let o = n.getContext("2d", { willReadFrequently: !0 });
+		if (!o) throw Error("2D canvas context unavailable");
+		o.drawImage(t, 0, 0, n.width, n.height);
+	}
+	return _t(n, null, t).report;
+}
+var yt = class {
+	constructor(e, t = {}) {
+		this.timerId = null, this.running = !1, this.capturing = !1, this.consecutivePassFrames = 0, this.previousSignature = null, this.latestReport = null, this.video = e, this.options = {
+			sampleIntervalMs: 180,
+			requiredStableFrames: 3,
+			mimeType: "image/png",
+			captureQuality: .94,
+			stopOnCapture: !0,
+			...t
+		}, this.analysisCanvas = document.createElement("canvas");
+	}
+	isRunning() {
+		return this.running;
+	}
+	getLatestReport() {
+		return this.latestReport;
+	}
+	start() {
+		this.running || (this.running = !0, this.capturing = !1, this.consecutivePassFrames = 0, this.previousSignature = null, this.scheduleNextTick(80));
+	}
+	stop() {
+		this.running = !1, this.timerId !== null && (window.clearTimeout(this.timerId), this.timerId = null), this.consecutivePassFrames = 0, this.previousSignature = null;
+	}
+	updateOptions(e) {
+		this.options = {
+			...this.options,
+			...e
+		};
+	}
+	scheduleNextTick(e) {
+		this.running && (this.timerId = window.setTimeout(() => {
+			this.tick();
+		}, e));
+	}
+	async tick() {
+		if (!this.running) return;
+		if (this.capturing) {
+			this.scheduleNextTick(this.options.sampleIntervalMs);
+			return;
+		}
+		let e = this.video.videoWidth, t = this.video.videoHeight;
+		if (this.video.readyState < 2 || e <= 0 || t <= 0) this.scheduleNextTick(this.options.sampleIntervalMs);
+		else {
+			try {
+				let n = Math.min(1, 360 / Math.max(e, t)), r = Math.max(32, Math.round(e * n)), i = Math.max(32, Math.round(t * n));
+				(this.analysisCanvas.width !== r || this.analysisCanvas.height !== i) && (this.analysisCanvas.width = r, this.analysisCanvas.height = i);
+				let a = this.analysisCanvas.getContext("2d", { willReadFrequently: !0 });
+				if (!a) {
+					this.scheduleNextTick(this.options.sampleIntervalMs);
+					return;
+				}
+				a.drawImage(this.video, 0, 0, r, i);
+				let { report: o, signature: s } = _t(this.analysisCanvas, this.previousSignature, this.options);
+				this.previousSignature = s, this.latestReport = o, o.passed ? this.consecutivePassFrames++ : this.consecutivePassFrames = 0;
+				let c = Math.max(1, this.options.requiredStableFrames), l = Math.min(1, this.consecutivePassFrames / c);
+				if (this.options.onQualityUpdate?.(o, l), this.consecutivePassFrames >= c) {
+					this.capturing = !0, this.consecutivePassFrames = 0;
+					let e = await this.captureFullFrame();
+					if (this.options.stopOnCapture && this.stop(), this.options.onAutoCapture?.(e, o), this.capturing = !1, !this.running) return;
+				}
+			} catch (e) {
+				this.capturing = !1, this.options.onError?.(e instanceof Error ? e : /* @__PURE__ */ Error("Camera auto-capture frame check failed"));
+			}
+			this.running && this.scheduleNextTick(this.options.sampleIntervalMs);
+		}
+	}
+	captureFullFrame() {
+		return new Promise((e, t) => {
+			let n = this.video.videoWidth, r = this.video.videoHeight;
+			if (!n || !r) {
+				t(/* @__PURE__ */ Error("Camera stream has no active video frame"));
+				return;
+			}
+			let i = document.createElement("canvas");
+			i.width = n, i.height = r;
+			let a = i.getContext("2d");
+			if (!a) {
+				t(/* @__PURE__ */ Error("2D canvas context unavailable"));
+				return;
+			}
+			a.drawImage(this.video, 0, 0, n, r);
+			let o = this.options.mimeType, s = o === "image/jpeg" ? "jpg" : o === "image/webp" ? "webp" : "png";
+			i.toBlob((n) => {
+				n ? e(new File([n], `auto-capture-${Date.now()}.${s}`, { type: o })) : t(/* @__PURE__ */ Error("Failed to encode captured camera frame"));
+			}, o, this.options.captureQuality);
+		});
+	}
+};
+function bt(e, t = {}) {
+	let n = new yt(e, t);
+	return n.start(), n;
+}
 // src/scanner/vizParser.ts
-var lt = {
+var xt = {
 	JAN: "01",
 	FEB: "02",
 	MAR: "03",
@@ -2309,7 +2653,7 @@ var lt = {
 	AGO: "08",
 	DIC: "12"
 };
-function ut(e) {
+function St(e) {
 	if (!e) return null;
 	let t = e.toUpperCase().replace(/\s+/g, " ").trim(), n = t.match(/\b((?:19|20)\d{2})[-./](\d{1,2})[-./](\d{1,2})\b/);
 	if (n) {
@@ -2317,11 +2661,11 @@ function ut(e) {
 		if (+t >= 1 && +t <= 12 && +r >= 1 && +r <= 31) return `${e}-${t.padStart(2, "0")}-${r.padStart(2, "0")}`;
 	}
 	if (n = t.match(/\b(\d{1,2})\s+([A-Z]{3,5})(?:\/[A-Z]{2,5})?\s+((?:19|20)\d{2})\b/), n) {
-		let [, e, t, r] = n, i = lt[t];
+		let [, e, t, r] = n, i = xt[t];
 		if (i && +e >= 1 && +e <= 31) return `${r}-${i}-${e.padStart(2, "0")}`;
 	}
 	if (n = t.match(/\b([A-Z]{3,5})\s+(\d{1,2}),?\s+((?:19|20)\d{2})\b/), n) {
-		let [, e, t, r] = n, i = lt[e];
+		let [, e, t, r] = n, i = xt[e];
 		if (i && +t >= 1 && +t <= 31) return `${r}-${i}-${t.padStart(2, "0")}`;
 	}
 	if (n = t.match(/\b(\d{1,2})(?:[-./]|\s+)(\d{1,2})(?:[-./]|\s+)((?:19|20)\d{2})\b/), n) {
@@ -2336,7 +2680,7 @@ function ut(e) {
 	}
 	return null;
 }
-function dt(e) {
+function Ct(e) {
 	let t = [];
 	for (let n of [
 		/\b(?:19|20)\d{2}[-./]\d{1,2}[-./]\d{1,2}\b/g,
@@ -2346,13 +2690,13 @@ function dt(e) {
 	]) {
 		let r = e.match(n);
 		if (r) for (let e of r) {
-			let n = ut(e);
+			let n = St(e);
 			n && !t.includes(n) && t.push(n);
 		}
 	}
 	return t;
 }
-var ft = [
+var wt = [
 	{
 		field: "surname",
 		patterns: [
@@ -2441,8 +2785,8 @@ var ft = [
 		field: "hairColor",
 		patterns: [/\b(?:hair|hair\s*colou?r|cheveux|haare)\b/i]
 	}
-], pt = [/\b(?:doktorgrad|doctoral\s*degr|degn?\s*ree|grade\s*de\s*docteur|ordens|rdens|oder\s*k[uü]nst|k[uü]nstlername|kinermamo|kinlenamo|kintlemamo|lername|no[em]\s+de\s+religion|rotgious|otgious|religious\s*name|stage\s*or\s*pen|nom\s*d['’]?artiste|pseudonyn|pseudonym|signature|unterschrift|firma\s*del\s*titular|holder['’]?s\s*signature)\b/i];
-function mt(e, t) {
+], Tt = [/\b(?:doktorgrad|doctoral\s*degr|degn?\s*ree|grade\s*de\s*docteur|ordens|rdens|oder\s*k[uü]nst|k[uü]nstlername|kinermamo|kinlenamo|kintlemamo|lername|no[em]\s+de\s+religion|rotgious|otgious|religious\s*name|stage\s*or\s*pen|nom\s*d['’]?artiste|pseudonyn|pseudonym|signature|unterschrift|firma\s*del\s*titular|holder['’]?s\s*signature)\b/i];
+function Et(e, t) {
 	let n = e.indexOf(":");
 	if (n !== -1 && n < 40) return e.slice(n + 1).trim();
 	let r = e;
@@ -2452,49 +2796,49 @@ function mt(e, t) {
 	}
 	return r.replace(/^[\s/:|.\-–—]+/, "").replace(/^(?:[\/|][A-Za-zÀ-ÿ\s]+)+[:\-]?\s*/, "").trim();
 }
-function ht(e, t) {
+function Dt(e, t) {
 	if (e.includes(":")) return !1;
 	if (/[\/|]/.test(e) && !/\d{1,2}\/\d{1,2}/.test(e)) return !0;
-	let n = mt(e, t.patterns);
+	let n = Et(e, t.patterns);
 	return n.length <= 2 || (t.field === "height" || t.field === "dateOfIssue" || t.field === "dateOfBirth" || t.field === "dateOfExpiry") && !/\d/.test(n);
 }
-function gt(e) {
-	return pt.some((t) => t.test(e)) ? !0 : ft.some((t) => t.patterns.some((n) => n.test(e) && ht(e, t)));
+function Ot(e) {
+	return Tt.some((t) => t.test(e)) ? !0 : wt.some((t) => t.patterns.some((n) => n.test(e) && Dt(e, t)));
 }
-function _t(e) {
-	return pt.some((t) => t.test(e)) ? !0 : ft.some((t) => t.patterns.some((t) => t.test(e)));
+function kt(e) {
+	return Tt.some((t) => t.test(e)) ? !0 : wt.some((t) => t.patterns.some((t) => t.test(e)));
 }
-function vt(e) {
+function At(e) {
 	let t = e.replace(/\s+/g, "");
 	return !!(/^[A-Z0-9<]{22,}$/.test(t) && (t.includes("<") || /\d{5,}/.test(t)));
 }
-function Q(e, t = !1) {
+function jt(e, t = !1) {
 	let n = e.replace(/^[\s=•·|>~_-]+/g, "").replace(/\s+[*•·|>~]+$/g, "").replace(/~/g, "");
 	return n = t ? n.replace(/([A-ZÄÖÜ]{2,}STRASSE)[-.\s]+\s*(\d)/gi, "$1 $2").replace(/([A-ZÄÖÜ]{3,})[-~]\s+(\d)/gi, "$1 $2").replace(/(\d)\.$/, "$1") : n.replace(/\s+\d$/g, ""), n.replace(/\s+/g, " ").trim();
 }
-function yt(e) {
+function Mt(e) {
 	let t = e.toUpperCase();
 	return /\b(?:PASSPORT|PASSEPORT|PASAPORTE|REISEPASS|PASSAPORTO|PASZPORT)\b/.test(t) ? "passport" : /\b(?:DRIVER(?:'S)?\s*LICEN[CS]E|DRIVING\s*LICEN[CS]E|PERMIS\s*DE\s*CONDUIRE|F[UÜ]HRERSCHEIN|PRAWO\s*JAZDY)\b/.test(t) ? "driver_license" : /\b(?:RESIDENCE\s*PERMIT|TITRE\s*DE\s*S[EÉ]JOUR|AUFENTHALTSTITEL|KARTA\s*POBYTU)\b/.test(t) ? "residence_permit" : /\b(?:VISA|VISUM)\b/.test(t) ? "visa" : /\b(?:IDENTITY\s*CARD|ID\s*CARD|NATIONAL\s*ID|CARTE\s*NATIONALE|PERSONALAUSWEIS|ANSCHRIFT|AUGENFARBE|DOW[OÓ]D\s*OSOBISTY|CARTA\s*D'IDENTIT[AÀ]|DNI)\b/.test(t) ? "id_card" : null;
 }
-function bt(e) {
+function Nt(e) {
 	let t = e.trim().toUpperCase();
 	return /^(?:M|MALE|HOMME|M[AÄ]NNLICH|MASCULINO|M[EĘ][ZŻ]CZYZNA)$/.test(t) ? "M" : /^(?:F|FEMALE|FEMME|WEIBLICH|FEMENINO|KOBIETA)$/.test(t) ? "F" : /^(?:X|NON[- ]?BINARY|OTHER|DIVERS)$/.test(t) ? "X" : t.startsWith("M/") || t === "M" ? "M" : t.startsWith("F/") || t === "F" ? "F" : null;
 }
-function xt(e, t) {
+function Pt(e, t) {
 	let n = Math.max(12, e.bbox.y1 - e.bbox.y0);
 	if (t.bbox.y0 < e.bbox.y0 + n * .25) return !1;
 	let r = e.bbox.x0 - 120, i = Math.max(e.bbox.x1 + 60, e.bbox.x0 + 360), a = (t.bbox.x0 + t.bbox.x1) / 2, o = Math.abs(t.bbox.x0 - e.bbox.x0) <= 130, s = t.bbox.x0 >= r && a <= i;
 	return o || s;
 }
-function St(e) {
+function Ft(e) {
 	return !(e.length < 2 || /[{}|\[\]<>~]/.test(e) || !/[A-ZÄÖÜÑ]{2,}/.test(e));
 }
-function Ct(e, t) {
+function It(e, t) {
 	let n = (t ?? []).map((e) => ({
 		text: e.text.replace(/\s+/g, " ").trim(),
 		bbox: e.bbox
-	})).filter((e) => e.text.length > 0 && !vt(e.text)).sort((e, t) => e.bbox.y0 - t.bbox.y0 || e.bbox.x0 - t.bbox.x0), r = n.length > 0 ? n.map((e) => e.text) : e.split(/\r?\n/).map((e) => e.replace(/\s+/g, " ").trim()).filter((e) => e.length > 0 && !vt(e)), i = {
-		documentTypeHint: yt(e),
+	})).filter((e) => e.text.length > 0 && !At(e.text)).sort((e, t) => e.bbox.y0 - t.bbox.y0 || e.bbox.x0 - t.bbox.x0), r = n.length > 0 ? n.map((e) => e.text) : e.split(/\r?\n/).map((e) => e.replace(/\s+/g, " ").trim()).filter((e) => e.length > 0 && !At(e)), i = {
+		documentTypeHint: Mt(e),
 		surname: null,
 		surnames: [],
 		givenNames: null,
@@ -2522,18 +2866,18 @@ function Ct(e, t) {
 	}, a = n.length > 0;
 	for (let e = 0; e < r.length; e++) {
 		let t = r[e];
-		if (pt.some((e) => e.test(t))) continue;
+		if (Tt.some((e) => e.test(t))) continue;
 		let o = a ? n[e] : null, s = t.match(/^([A-Za-z][A-Za-z0-9\s/().'-]{1,32}):\s*(.+)$/), c = !1;
-		for (let s of ft) {
+		for (let s of wt) {
 			for (let l of s.patterns) if (l.test(t)) {
 				c = !0;
 				let l = s.field === "sex" ? 1 : 2, u = [], d = null, f = null;
 				if (o) for (let t = e + 1; t < n.length; t++) {
 					let e = n[t];
-					if (!xt(o, e)) continue;
-					if (_t(e.text)) break;
+					if (!Pt(o, e)) continue;
+					if (kt(e.text)) break;
 					if (e.text.length < l) continue;
-					if (s.field === "placeOfBirth" && !St(e.text)) {
+					if (s.field === "placeOfBirth" && !Ft(e.text)) {
 						if (u.length > 0) break;
 						continue;
 					}
@@ -2555,48 +2899,48 @@ function Ct(e, t) {
 					let r = s.field === "address" ? 4 : s.field === "placeOfBirth" || s.field === "surname" ? 2 : 1;
 					if (u.length >= r) break;
 				}
-				let p = ht(t, s) ? "" : mt(t, s.patterns), m = p, h = 0;
-				if ((!m || m.length < l) && (u.length > 0 ? m = u[0] : !a && e + 1 < r.length && !gt(r[e + 1]) && (m = r[e + 1], h = 1)), !m) continue;
+				let p = Dt(t, s) ? "" : Et(t, s.patterns), m = p, h = 0;
+				if ((!m || m.length < l) && (u.length > 0 ? m = u[0] : !a && e + 1 < r.length && !Ot(r[e + 1]) && (m = r[e + 1], h = 1)), !m) continue;
 				if (s.field === "dateOfBirth" || s.field === "dateOfIssue" || s.field === "dateOfExpiry") {
-					let e = ut(m);
+					let e = St(m);
 					e && !i[s.field] && (i[s.field] = e);
 				} else if (s.field === "sex") {
-					let e = bt(m);
+					let e = Nt(m);
 					e && !i.sex && (i.sex = e);
 				} else if (s.field === "address" || s.field === "placeOfBirth") {
 					let t = s.field === "address", n = [];
-					if (a && !p && u.length > 0) n = u.map((e) => Q(e, t)).filter((e) => e.length >= 2);
+					if (a && !p && u.length > 0) n = u.map((e) => jt(e, t)).filter((e) => e.length >= 2);
 					else {
-						n = [Q(m, t)];
+						n = [jt(m, t)];
 						let i = s.field === "address" ? 3 : 2, a = e + h + 1;
-						for (; n.length < i && a < r.length && !_t(r[a]);) {
-							let e = Q(r[a], t);
+						for (; n.length < i && a < r.length && !kt(r[a]);) {
+							let e = jt(r[a], t);
 							if (e.length >= 2 && !/^\d{1,2}$/.test(e)) {
-								if (s.field === "placeOfBirth" && !St(e)) break;
+								if (s.field === "placeOfBirth" && !Ft(e)) break;
 								n.push(e);
 							}
 							a++;
 						}
 					}
 					!i[s.field] && n.length > 0 && (i[s.field] = n.join(", "));
-				} else if (s.field === "parents") i.parents ||= Q(m);
+				} else if (s.field === "parents") i.parents ||= jt(m);
 				else if (s.field === "height") {
-					let e = Q(m);
+					let e = jt(m);
 					/\d/.test(e) && !i.height && (i.height = e);
 				} else if (s.field === "surname") {
-					let e = (a && !p && u.length > 0 ? u.map((e) => Q(e)).filter(Boolean) : [Q(m)].filter(Boolean)).join(" ");
+					let e = (a && !p && u.length > 0 ? u.map((e) => jt(e)).filter(Boolean) : [jt(m)].filter(Boolean)).join(" ");
 					e && (i.surname ? /segundo\s*apellido|2[oº]\.?\s*apellido/i.test(t) && !i.surnames.includes(e) && (i.surnames = [...i.surnames, e], i.surname = i.surnames.join(" ")) : (i.surname = e, i.surnames = e.split(/\s+/).filter(Boolean)));
-				} else i[s.field] || (i[s.field] = Q(m));
+				} else i[s.field] || (i[s.field] = jt(m));
 				break;
 			}
 			if (c) break;
 		}
 		if (!c && s) {
-			let e = s[1].trim(), t = Q(s[2]);
+			let e = s[1].trim(), t = jt(s[2]);
 			e && t && t.length <= 100 && (i.unmappedKeyValues[e] = t);
 		}
 	}
-	let o = dt(r.join("\n")).sort();
+	let o = Ct(r.join("\n")).sort();
 	if (o.length > 0) {
 		let e = (/* @__PURE__ */ new Date()).getFullYear();
 		if (!i.dateOfBirth) {
@@ -2626,7 +2970,8 @@ function Ct(e, t) {
 	return i;
 }
 // src/scanner/ocrEngine.ts
-function wt(e) {
+var Lt = "ocrb_int", Rt = "https://cdn.jsdelivr.net/gh/Shreeshrii/tessdata_ocrb@master";
+function zt(e) {
 	if (!e) return null;
 	let t = e.match(/^(\d{4})-(\d{2})-(\d{2})$/);
 	if (!t) return null;
@@ -2635,7 +2980,7 @@ function wt(e) {
 	let r = /* @__PURE__ */ new Date(), i = r.getFullYear() - n.getFullYear(), a = r.getMonth() - n.getMonth();
 	return (a < 0 || a === 0 && r.getDate() < n.getDate()) && i--, i >= 0 && i <= 130 ? i : null;
 }
-function Tt(e) {
+function Bt(e) {
 	if (!e) return null;
 	let t = e.match(/^(\d{4})-(\d{2})-(\d{2})$/);
 	if (!t) return null;
@@ -2644,7 +2989,7 @@ function Tt(e) {
 	let r = /* @__PURE__ */ new Date();
 	return r.setHours(0, 0, 0, 0), n < r;
 }
-function Et(e, t) {
+function Vt(e, t) {
 	if (e) {
 		let n = e.documentCode.toUpperCase();
 		if (n.startsWith("P")) return "passport";
@@ -2658,17 +3003,17 @@ function $(e, t, n, r) {
 	let i = e != null && String(e).trim() !== "", a = t != null && String(t).trim() !== "";
 	return i && a ? (r[n] = "MRZ+VIZ", e) : i ? (r[n] = "MRZ", e) : a ? (r[n] = "VIZ", t) : null;
 }
-function Dt(e) {
+function Ht(e) {
 	return e.toUpperCase().replace(/[ODQ]/g, "0").replace(/[ILT]/g, "1").replace(/Z/g, "2").replace(/S/g, "5").replace(/G/g, "6").replace(/B/g, "8");
 }
-function Ot(e, t, n) {
+function Ut(e, t, n) {
 	if (e?.documentNumber && t) {
 		let r = e.checkDigits.find((e) => e.field === "documentNumber"), i = e.documentNumber.trim().toUpperCase(), a = t.trim().toUpperCase();
-		if (r && !r.valid && i.length === a.length && Dt(i) === Dt(a)) return n.documentNumber = "MRZ+VIZ", a;
+		if (r && !r.valid && i.length === a.length && Ht(i) === Ht(a)) return n.documentNumber = "MRZ+VIZ", a;
 	}
 	return $(e?.documentNumber, t, "documentNumber", n);
 }
-function kt(e) {
+function Wt(e) {
 	if (!e) return [];
 	let t = [];
 	for (let n of e) for (let e of n.paragraphs) for (let n of e.lines) {
@@ -2717,7 +3062,7 @@ function kt(e) {
 	}
 	return n;
 }
-function At(e, t, n, r, i) {
+function Gt(e, t, n, r, i) {
 	let a = Math.max(0, Math.floor(t)), o = Math.max(0, Math.floor(n)), s = Math.min(e.width - 1, Math.ceil(r)), c = Math.min(e.height - 1, Math.ceil(i)), l = s, u = c, d = a, f = o;
 	for (let t = o; t <= c; t++) {
 		let n = t * e.width;
@@ -2783,7 +3128,7 @@ function At(e, t, n, r, i) {
 		isZee: p >= m * .48 && _(0, 1) >= .38 && _(0, 2) >= .38 && _(1, 0) <= .28 && _(1, 2) <= .22 && _(1, 1) >= .3 && _(2, 0) >= .38 && _(2, 1) >= .3 && _(2, 2) >= .25
 	};
 }
-function jt(e, t, n, r, i) {
+function Kt(e, t, n, r, i) {
 	let a = Math.max(0, Math.floor(t)), o = Math.min(e.width - 1, Math.ceil(r)), s = Math.max(0, Math.floor(n)), c = Math.min(e.height - 1, Math.ceil(i)), l = o, u = a;
 	for (let t = a; t <= o; t++) {
 		let n = 0;
@@ -2798,7 +3143,7 @@ function jt(e, t, n, r, i) {
 		inkX1: u
 	};
 }
-function Mt(e, t) {
+function qt(e, t) {
 	if (!e || e.length === 0) return {
 		symbolRepairedText: "",
 		gridRepairedText: ""
@@ -2820,11 +3165,11 @@ function Mt(e, t) {
 	for (let e of n) {
 		let n = e.syms.map((e) => e.bbox.x1 - e.bbox.x0).filter((e) => e > 12).sort((e, t) => e - t), i = n[Math.floor(n.length / 2)] || 34, a = "";
 		for (let n = 0; n < e.syms.length; n++) {
-			let r = e.syms[n], o = r.bbox.x1 - r.bbox.x0, s = At(t, r.bbox.x0, r.bbox.y0, r.bbox.x1, r.bbox.y1);
+			let r = e.syms[n], o = r.bbox.x1 - r.bbox.x0, s = Gt(t, r.bbox.x0, r.bbox.y0, r.bbox.x1, r.bbox.y1);
 			if (n + 1 < e.syms.length) {
 				let c = e.syms[n + 1], l = c.bbox.x1 - c.bbox.x0, u = c.bbox.x1 - r.bbox.x0;
 				if (c.bbox.x0 <= r.bbox.x1 + 2 && u <= i * 1.75) {
-					let o = At(t, c.bbox.x0, c.bbox.y0, c.bbox.x1, c.bbox.y1);
+					let o = Gt(t, c.bbox.x0, c.bbox.y0, c.bbox.x1, c.bbox.y1);
 					if (s.isChevron || o.isChevron) {
 						a += "<";
 						let t = Math.max(r.bbox.x1, c.bbox.x1);
@@ -2832,7 +3177,7 @@ function Mt(e, t) {
 						continue;
 					}
 				}
-				if (u <= i * 1.45 && (o < i * .8 || l < i * .48) && At(t, r.bbox.x0, Math.min(r.bbox.y0, c.bbox.y0), c.bbox.x1, Math.max(r.bbox.y1, c.bbox.y1)).isChevron) {
+				if (u <= i * 1.45 && (o < i * .8 || l < i * .48) && Gt(t, r.bbox.x0, Math.min(r.bbox.y0, c.bbox.y0), c.bbox.x1, Math.max(r.bbox.y1, c.bbox.y1)).isChevron) {
 					a += "<", n++;
 					continue;
 				}
@@ -2850,9 +3195,9 @@ function Mt(e, t) {
 			let l = s === 30 && a.length === 3 ? a : a.slice(-2), u = s === 30 && a.length === 3 ? o : o.slice(-2);
 			s === 44 && u.length === 2 && u.every((e) => e.length === 45) && (s = 45);
 			for (let e of l) {
-				let n = e.syms.map((e) => e.bbox.x1 - e.bbox.x0).filter((e) => e > 12).sort((e, t) => e - t), r = n[Math.floor(n.length / 2)] || 30, { inkX0: a, inkX1: o } = jt(t, e.bbox.x0, e.bbox.y0, e.bbox.x1, e.bbox.y1), c = a + r / 2, l = (o - r / 2 - c) / (s - 1), u = "";
+				let n = e.syms.map((e) => e.bbox.x1 - e.bbox.x0).filter((e) => e > 12).sort((e, t) => e - t), r = n[Math.floor(n.length / 2)] || 30, { inkX0: a, inkX1: o } = Kt(t, e.bbox.x0, e.bbox.y0, e.bbox.x1, e.bbox.y1), c = a + r / 2, l = (o - r / 2 - c) / (s - 1), u = "";
 				for (let n = 0; n < s; n++) {
-					let i = c + n * l, a = i - l * .36, o = i + l * .36, s = At(t, a, e.bbox.y0, o, e.bbox.y1);
+					let i = c + n * l, a = i - l * .36, o = i + l * .36, s = Gt(t, a, e.bbox.y0, o, e.bbox.y1);
 					if (s.empty || s.isChevron) {
 						u += "<";
 						continue;
@@ -2868,7 +3213,7 @@ function Mt(e, t) {
 					let f = d[0];
 					if (f) {
 						let e = f.bbox.x1 - f.bbox.x0, n = f.text.toUpperCase();
-						At(t, f.bbox.x0, f.bbox.y0, f.bbox.x1, f.bbox.y1).isChevron ? u += "<" : e > r * 1.45 && s.isThinBar || (n === "T" || n === "K" || n === "L") && s.isThinBar || n === "T" && s.gw <= s.gh * .48 ? u += "1" : n === "L" && s.isZee ? u += "Z" : (n === "I" || n === "1" || n === "L") && s.isNine ? u += "9" : u += n;
+						Gt(t, f.bbox.x0, f.bbox.y0, f.bbox.x1, f.bbox.y1).isChevron ? u += "<" : e > r * 1.45 && s.isThinBar || (n === "T" || n === "K" || n === "L") && s.isThinBar || n === "T" && s.gw <= s.gh * .48 ? u += "1" : n === "L" && s.isZee ? u += "Z" : (n === "I" || n === "1" || n === "L") && s.isNine ? u += "9" : u += n;
 					} else s.isThinBar ? u += "1" : u += "<";
 				}
 				i.push(u);
@@ -2880,11 +3225,11 @@ function Mt(e, t) {
 		gridRepairedText: i.join("\n")
 	};
 }
-function Nt(e) {
+function Jt(e) {
 	let t = e.rawLines.join("").split("<").length - 1, n = /^[A-Z]{1,3}$/.test(e.issuingCountry);
 	return e.validCount * 100 + (e.allCheckDigitsValid ? 50 : 0) + (n ? 20 : 0) + (e.dateOfBirth ? 15 : 0) + (e.dateOfExpiry ? 15 : 0) + (e.surname ? 10 : 0) + (e.givenNames ? 10 : 0) + Math.min(t, 60);
 }
-function Pt(e) {
+function Yt(e) {
 	return [
 		e.surname,
 		e.givenNames,
@@ -2899,19 +3244,19 @@ function Pt(e) {
 		e.placeOfBirth
 	].filter((e) => e !== null && String(e).trim() !== "").length;
 }
-function Ft(e, t, n, r) {
+function Xt(e, t, n, r) {
 	let i = 0;
 	e && (i += e.validCount * 120, e.allCheckDigitsValid && (i += 200), /^[PVIAC]/.test(e.documentCode) && (i += 60), e.dateOfBirth && (i += 35), e.dateOfExpiry && (i += 35), e.surname && (i += 30), e.givenNames && (i += 25), e.documentNumber && (i += 25));
-	let a = Pt(t);
+	let a = Yt(t);
 	i += a * 28, t.documentTypeHint && (i += 25), i += n * .8;
 	let o = (r.match(/[A-Za-z]{3,}/g) || []).length;
 	return i += Math.min(o, 30) * 1.5, i;
 }
-function It(e) {
+function Zt(e) {
 	let t = (e % 360 + 360) % 360;
 	return Math.round(t * 10) / 10;
 }
-function Lt(e, t, n, r) {
+function Qt(e, t, n, r) {
 	if (n) return (i) => {
 		n({
 			stage: i.stage,
@@ -2920,136 +3265,214 @@ function Lt(e, t, n, r) {
 		});
 	};
 }
-var Rt = class {
+var $t = class {
 	constructor(e = {}) {
-		this.worker = null, this.workerLang = null, this.workerConfigKey = null, this.activeStageCallback = null, this.activeStage = "initializing_ocr", this.defaultWorkerConfig = { ...e };
+		this.worker = null, this.workerLang = null, this.workerConfigKey = null, this.mrzWorker = null, this.mrzWorkerConfigKey = null, this.mrzOcrbFailed = !1, this.activeStageCallback = null, this.activeStage = "initializing_ocr", this.defaultWorkerConfig = { ...e };
+	}
+	mergeWorkerConfig(e) {
+		return {
+			workerPath: e.workerPath ?? this.defaultWorkerConfig.workerPath,
+			corePath: e.corePath ?? this.defaultWorkerConfig.corePath,
+			langPath: e.langPath ?? this.defaultWorkerConfig.langPath,
+			workerBlobURL: e.workerBlobURL ?? this.defaultWorkerConfig.workerBlobURL,
+			mrzModel: e.mrzModel ?? this.defaultWorkerConfig.mrzModel ?? "ocrb",
+			mrzLanguage: e.mrzLanguage ?? this.defaultWorkerConfig.mrzLanguage,
+			mrzLangPath: e.mrzLangPath ?? this.defaultWorkerConfig.mrzLangPath,
+			mrzGzip: e.mrzGzip ?? this.defaultWorkerConfig.mrzGzip
+		};
+	}
+	createLoggerOption(e) {
+		return (t) => {
+			if (this.activeStageCallback && t.status === "recognizing text") {
+				if (e === "full" && this.activeStage !== "recognizing_full" || e === "mrz" && this.activeStage !== "recognizing_mrz") return;
+				let n = this.activeStage === "recognizing_full" ? 25 : 65, r = this.activeStage === "recognizing_full" ? 35 : 25, i = Math.round(n + (t.progress || 0) * r);
+				this.activeStageCallback({
+					stage: this.activeStage,
+					progress: i,
+					message: this.activeStage === "recognizing_full" ? "Reading document text & visual inspection zone…" : "Running dedicated OCR-B MRZ strip verification…"
+				});
+			}
+		};
 	}
 	async ensureWorker(e, t, n) {
 		this.activeStageCallback = n ?? null;
-		let r = {
-			workerPath: t.workerPath ?? this.defaultWorkerConfig.workerPath,
-			corePath: t.corePath ?? this.defaultWorkerConfig.corePath,
-			langPath: t.langPath ?? this.defaultWorkerConfig.langPath,
-			workerBlobURL: t.workerBlobURL ?? this.defaultWorkerConfig.workerBlobURL
-		}, i = JSON.stringify(r);
+		let r = this.mergeWorkerConfig(t), i = JSON.stringify({
+			workerPath: r.workerPath,
+			corePath: r.corePath,
+			langPath: r.langPath,
+			workerBlobURL: r.workerBlobURL
+		});
 		if (this.worker && this.workerLang === e && this.workerConfigKey === i) return this.worker;
 		this.worker &&= (await this.worker.terminate(), null), this.activeStage = "initializing_ocr", n?.({
 			stage: "initializing_ocr",
 			progress: 12,
 			message: "Initializing client-side Tesseract OCR engine…"
 		});
-		let a = { logger: (e) => {
-			if (this.activeStageCallback && e.status === "recognizing text") {
-				let t = this.activeStage === "recognizing_full" ? 25 : 65, n = this.activeStage === "recognizing_full" ? 35 : 25, r = Math.round(t + (e.progress || 0) * n);
-				this.activeStageCallback({
-					stage: this.activeStage,
-					progress: r,
-					message: this.activeStage === "recognizing_full" ? "Reading document text & visual inspection zone…" : "Running high-contrast MRZ strip verification…"
-				});
-			}
-		} };
+		let a = { logger: this.createLoggerOption("full") };
 		r.workerPath && (a.workerPath = r.workerPath), r.corePath && (a.corePath = r.corePath), r.langPath && (a.langPath = r.langPath), r.workerBlobURL !== void 0 && (a.workerBlobURL = r.workerBlobURL);
-		let o = await (0, U.createWorker)(e, 1, a, {
+		let o = await (0, q.createWorker)(e, 1, a, {
 			load_system_dawg: "0",
 			load_freq_dawg: "0"
 		});
 		return this.worker = o, this.workerLang = e, this.workerConfigKey = i, o;
 	}
-	async runOrientationPass(e, t, n, r, i, a, o, s = !0) {
-		let c = await _e(e, {
-			preprocess: i,
-			rotation: n,
-			deskewDegrees: r
+	async ensureMrzWorker(e, t, n) {
+		this.activeStageCallback = n ?? null;
+		let r = this.mergeWorkerConfig(t);
+		if ((r.mrzModel ?? "ocrb") === "standard") return {
+			worker: e,
+			modelUsed: "standard"
+		};
+		let i = r.mrzLanguage ?? Lt, a = r.mrzLangPath ?? Rt, o = r.mrzGzip ?? !1, s = JSON.stringify({
+			workerPath: r.workerPath,
+			corePath: r.corePath,
+			workerBlobURL: r.workerBlobURL,
+			mrzLang: i,
+			mrzLangPath: a,
+			mrzGzip: o
 		});
-		s && (this.activeStage = "recognizing_full", o?.({
+		if (this.mrzWorker && this.mrzWorkerConfigKey === s) return {
+			worker: this.mrzWorker,
+			modelUsed: "ocrb"
+		};
+		if (this.mrzOcrbFailed && this.mrzWorkerConfigKey === s) return {
+			worker: e,
+			modelUsed: "standard"
+		};
+		this.mrzWorker &&= (await this.mrzWorker.terminate(), null);
+		try {
+			this.activeStage = "initializing_ocr", n?.({
+				stage: "initializing_ocr",
+				progress: 14,
+				message: "Loading specialized OCR-B MRZ recognition model…"
+			});
+			let e = {
+				langPath: a,
+				gzip: o,
+				logger: this.createLoggerOption("mrz")
+			};
+			r.workerPath && (e.workerPath = r.workerPath), r.corePath && (e.corePath = r.corePath), r.workerBlobURL !== void 0 && (e.workerBlobURL = r.workerBlobURL);
+			let t = await (0, q.createWorker)(i, 1, e, {
+				load_system_dawg: "0",
+				load_freq_dawg: "0"
+			});
+			return this.mrzWorker = t, this.mrzWorkerConfigKey = s, this.mrzOcrbFailed = !1, {
+				worker: t,
+				modelUsed: "ocrb"
+			};
+		} catch {
+			return this.mrzWorkerConfigKey = s, this.mrzOcrbFailed = !0, {
+				worker: e,
+				modelUsed: "standard"
+			};
+		}
+	}
+	async runOrientationPass(e, t, n, r, i, a, o, s, c = !0) {
+		let l = await pe(e, {
+			preprocess: a,
+			rotation: r,
+			deskewDegrees: i
+		});
+		c && (this.activeStage = "recognizing_full", s?.({
 			stage: "recognizing_full",
 			progress: 25,
 			message: "Reading document text & visual inspection zone…"
 		})), await t.setParameters({
-			tessedit_pageseg_mode: U.PSM.SPARSE_TEXT,
+			tessedit_pageseg_mode: q.PSM.SPARSE_TEXT,
 			tessedit_char_whitelist: ""
 		});
-		let l = i ? c.enhancedDataUrl : c.originalDataUrl, u = await t.recognize(l, {}, { blocks: !0 }), d = u.data.text || "", f = u.data.confidence || 0;
-		if (d.trim().split(/\r?\n/).filter(Boolean).length < 2) {
+		let u = a ? l.enhancedDataUrl : l.originalDataUrl, d = await t.recognize(u, {}, { blocks: !0 }), f = d.data.text || "", p = d.data.confidence || 0;
+		if (f.trim().split(/\r?\n/).filter(Boolean).length < 2) {
 			await t.setParameters({
-				tessedit_pageseg_mode: U.PSM.AUTO,
+				tessedit_pageseg_mode: q.PSM.AUTO,
 				tessedit_char_whitelist: ""
 			});
-			let e = await t.recognize(l, {}, { blocks: !0 });
-			(e.data.text || "").trim().length > d.trim().length && (u = e, d = e.data.text || "", f = e.data.confidence || 0);
+			let e = await t.recognize(u, {}, { blocks: !0 });
+			(e.data.text || "").trim().length > f.trim().length && (d = e, f = e.data.text || "", p = e.data.confidence || 0);
 		}
-		let p = kt(u.data.blocks), m = p.length > 0 ? p.map((e) => e.text).join("\n") : d, h = [], g = Pe(d);
-		g && h.push(g);
-		let _ = "";
-		if (a) {
-			s && (this.activeStage = "recognizing_mrz", o?.({
+		let m = Wt(d.data.blocks), h = m.length > 0 ? m.map((e) => e.text).join("\n") : f, g = [], _ = Me(f);
+		_ && g.push(_);
+		let v = "", y = n.mrzModel ?? this.defaultWorkerConfig.mrzModel ?? "ocrb";
+		if (o) {
+			let e = await this.ensureMrzWorker(t, n, s), r = e.worker;
+			y = e.modelUsed, c && (this.activeStage = "recognizing_mrz", s?.({
 				stage: "recognizing_mrz",
 				progress: 65,
-				message: "Running high-contrast MRZ strip verification…"
-			})), await t.setParameters({
-				tessedit_pageseg_mode: U.PSM.SINGLE_BLOCK,
+				message: y === "ocrb" ? "Running dedicated OCR-B MRZ strip verification…" : "Running high-contrast MRZ strip verification…"
+			})), await r.setParameters({
+				tessedit_pageseg_mode: q.PSM.SINGLE_BLOCK,
 				tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<"
 			});
-			let e = async (e, n) => {
-				let r = await t.recognize(e, {}, { blocks: !0 }), i = (r.data.text || "").trim();
-				i && !_ && (_ = i);
-				let a = Pe(i);
-				a && h.push(a);
-				let o = Mt(r.data.blocks, n);
+			let i = async (e, t) => {
+				let n = await r.recognize(e, {}, { blocks: !0 }), i = (n.data.text || "").trim();
+				i && !v && (v = i);
+				let a = Me(i);
+				a && g.push(a);
+				let o = qt(n.data.blocks, t);
 				if (o.symbolRepairedText) {
-					let e = Pe(o.symbolRepairedText);
-					e && h.push(e);
+					let e = Me(o.symbolRepairedText);
+					e && g.push(e);
 				}
 				if (o.gridRepairedText) {
-					let e = Pe(o.gridRepairedText);
-					e && (h.push(e), _ = o.gridRepairedText);
+					let e = Me(o.gridRepairedText);
+					e && (g.push(e), v = o.gridRepairedText);
 				}
 			};
-			await e(c.mrzCropDataUrl, c.mrzGrayscale), h.some((e) => e.allCheckDigitsValid) || (s && o?.({
+			await i(l.mrzCropDataUrl, l.mrzGrayscale), g.some((e) => e.allCheckDigitsValid) || (c && s?.({
 				stage: "recognizing_mrz",
 				progress: 80,
 				message: "Isolating lower passport MRZ band…"
-			}), await e(c.mrzTightCropDataUrl, c.mrzTightGrayscale));
+			}), await i(l.mrzTightCropDataUrl, l.mrzTightGrayscale));
 		}
-		let v = null;
-		h.length > 0 && (h.sort((e, t) => Nt(t) - Nt(e)), v = h[0]);
-		let y = Ct(m, p), b = Pt(y), x = Ft(v, y, f, m), S = v !== null && (v.allCheckDigitsValid || v.validCount >= 2 || v.validCount >= 1 && !!(v.surname || v.documentNumber) && f >= 48) || v === null && f >= 65 && b >= 4;
+		let b = null;
+		g.length > 0 && (g.sort((e, t) => Jt(t) - Jt(e)), b = g[0]);
+		let x = It(h, m), S = Yt(x), C = Xt(b, x, p, h), w = b !== null && (b.allCheckDigitsValid || b.validCount >= 2 || b.validCount >= 1 && !!(b.surname || b.documentNumber) && p >= 48) || b === null && p >= 65 && S >= 4;
 		return {
-			coarse: n,
-			preprocessed: c,
-			cleanedFullText: m,
-			vizLineBoxes: p,
-			vizData: y,
-			mrzData: v,
-			mrzRawText: _,
-			confidence: f,
-			probeScore: x,
-			isConfidentUpright: S
+			coarse: r,
+			preprocessed: l,
+			cleanedFullText: h,
+			vizLineBoxes: m,
+			vizData: x,
+			mrzData: b,
+			mrzRawText: v,
+			mrzModelUsed: y,
+			confidence: p,
+			probeScore: C,
+			isConfidentUpright: w
 		};
 	}
 	async runLightweightProbe(e, t, n, r, i) {
-		let a = await _e(e, {
+		let a = await pe(e, {
 			preprocess: i,
 			rotation: n,
 			deskewDegrees: r
 		});
 		await t.setParameters({
-			tessedit_pageseg_mode: U.PSM.SPARSE_TEXT,
+			tessedit_pageseg_mode: q.PSM.SPARSE_TEXT,
 			tessedit_char_whitelist: ""
 		});
-		let o = i ? a.enhancedDataUrl : a.originalDataUrl, s = await t.recognize(o, {}, { blocks: !0 }), c = s.data.text || "", l = s.data.confidence || 0, u = kt(s.data.blocks), d = u.length > 0 ? u.map((e) => e.text).join("\n") : c, f = Ct(d, u);
-		return Ft(Pe(c), f, l, d);
+		let o = i ? a.enhancedDataUrl : a.originalDataUrl, s = await t.recognize(o, {}, { blocks: !0 }), c = s.data.text || "", l = s.data.confidence || 0, u = Wt(s.data.blocks), d = u.length > 0 ? u.map((e) => e.text).join("\n") : c, f = It(d, u);
+		return Xt(Me(c), f, l, d);
 	}
 	async scan(e, t = {}) {
-		let n = performance.now(), { language: r = "eng", preprocess: i = !0, enhanceMrzPass: a = !0, perspectiveCorrection: o = !0, corners: s, rotation: c = 0, deskewDegrees: l = 0, includePreviews: u = !0, workerPath: d, corePath: f, langPath: p, workerBlobURL: m, onProgress: h } = t, g = t.autoRotate === void 0 ? c === 0 && l === 0 : t.autoRotate;
-		h?.({
+		let n = performance.now(), { language: r = "eng", preprocess: i = !0, enhanceMrzPass: a = !0, perspectiveCorrection: o = !0, corners: s, rotation: c = 0, deskewDegrees: l = 0, includeQualityReport: u = !0, enforceQualityGate: d = !1, qualityGateOptions: f, includePreviews: p = !0, workerPath: m, corePath: h, langPath: g, workerBlobURL: _, mrzModel: v, mrzLanguage: y, mrzLangPath: b, mrzGzip: x, onProgress: S } = t, C = {
+			workerPath: m,
+			corePath: h,
+			langPath: g,
+			workerBlobURL: _,
+			mrzModel: v,
+			mrzLanguage: y,
+			mrzLangPath: b,
+			mrzGzip: x
+		}, w = t.autoRotate === void 0 ? c === 0 && l === 0 : t.autoRotate;
+		S?.({
 			stage: "preprocessing",
 			progress: 4,
-			message: o || s ? "Decoding document & checking 4-corner perspective…" : g ? "Decoding document & analyzing orientation…" : "Preprocessing image & isolating MRZ region…"
+			message: o || s ? "Decoding document & checking 4-corner perspective…" : w ? "Decoding document & analyzing orientation…" : "Preprocessing image & isolating MRZ region…"
 		});
-		let _ = await de(e), v = _, y;
+		let T = await ce(e), E = T, D;
 		if (s) {
-			h?.({
+			S?.({
 				stage: "detecting_perspective",
 				progress: 9,
 				message: "Applying 4-corner perspective rectification…"
@@ -3060,22 +3483,22 @@ var Rt = class {
 				s.bottomRight,
 				s.bottomLeft
 			]);
-			v = ct(_, e);
+			E = ut(T, e);
 			let t = Math.abs(e.topLeft.x * e.topRight.y - e.topRight.x * e.topLeft.y + (e.topRight.x * e.bottomRight.y - e.bottomRight.x * e.topRight.y) + (e.bottomRight.x * e.bottomLeft.y - e.bottomLeft.x * e.bottomRight.y) + (e.bottomLeft.x * e.topLeft.y - e.topLeft.x * e.bottomLeft.y)) / 2;
-			y = {
+			D = {
 				applied: !0,
 				autoDetected: !1,
 				corners: e,
 				sourceQuadAreaRatio: Math.round(t * 1e3) / 1e3
 			};
 		} else if (o) {
-			h?.({
+			S?.({
 				stage: "detecting_perspective",
 				progress: 9,
 				message: "Detecting document borders for perspective correction…"
 			});
-			let e = ot(_);
-			e ? (v = ct(_, e.corners), y = e) : y = {
+			let e = ct(T);
+			e ? (E = ut(T, e.corners), D = e) : D = {
 				applied: !1,
 				autoDetected: !0,
 				corners: {
@@ -3099,104 +3522,107 @@ var Rt = class {
 				sourceQuadAreaRatio: 1
 			};
 		}
-		let b = await this.ensureWorker(r, {
-			workerPath: d,
-			corePath: f,
-			langPath: p,
-			workerBlobURL: m
-		}, h), x = l, S = [c];
-		if (g) {
-			h?.({
+		let O;
+		if ((u || d) && (d && S?.({
+			stage: "quality_check",
+			progress: 11,
+			message: "Evaluating sharpness, glare & exposure quality gate…"
+		}), O = await vt(E, f), d && !O.passed)) throw new dt(O);
+		let k = await this.ensureWorker(r, C, S), A = l, j = [c];
+		if (w) {
+			S?.({
 				stage: "detecting_orientation",
 				progress: 16,
 				message: "Detecting document rotation & skew angle…"
 			});
-			let e = fe(v, 400), t = ze(e.data, e.width, e.height);
-			x = t.deskewDegrees, S = t.rankedCoarseRotations;
+			let e = le(E, 400), t = Le(e.data, e.width, e.height);
+			A = t.deskewDegrees, j = t.rankedCoarseRotations;
 		}
-		let C = await this.runOrientationPass(v, b, S[0], x, i, a, h, !0);
-		if (g && !C.isConfidentUpright) {
-			let e = C.coarse, t = C.probeScore;
-			for (let n = 1; n < S.length; n++) {
-				let r = S[n];
-				h?.({
+		let M = await this.runOrientationPass(E, k, C, j[0], A, i, a, S, !0);
+		if (w && !M.isConfidentUpright) {
+			let e = M.coarse, t = M.probeScore;
+			for (let n = 1; n < j.length; n++) {
+				let r = j[n];
+				S?.({
 					stage: "detecting_orientation",
 					progress: 82 + n * 3,
 					message: `Checking ${r}° orientation alignment…`
 				});
-				let a = await this.runLightweightProbe(v, b, r, x, i);
+				let a = await this.runLightweightProbe(E, k, r, A, i);
 				if (a > t && (t = a, e = r, a >= 240)) break;
 			}
-			e !== C.coarse && (C = await this.runOrientationPass(v, b, e, x, i, a, h, !1));
+			e !== M.coarse && (M = await this.runOrientationPass(E, k, C, e, A, i, a, S, !1));
 		}
-		h?.({
+		S?.({
 			stage: "parsing",
 			progress: 92,
 			message: "Extracting personal fields & verifying ICAO 9303 check digits…"
 		});
-		let { preprocessed: w, cleanedFullText: T, vizData: E, mrzData: D, mrzRawText: O, confidence: k } = C, A = {}, j = $(D?.issuingCountry, E.issuingCountry, "issuingCountry", A), M = $(D?.nationality, E.nationality, "nationality", A), N = $(D?.surname, E.surname, "surname", A), P = D?.surnames && D.surnames.length > 0 ? D.surnames : E.surnames.length > 0 ? E.surnames : N ? N.split(/\s+/).filter(Boolean) : [], F = $(D?.givenNames, E.givenNames, "givenNames", A), I = D?.givenNamesList && D.givenNamesList.length > 0 ? D.givenNamesList : F ? F.split(/\s+/).filter(Boolean) : [], L = $(D && (D.givenNames || D.surname) ? [D.givenNames, D.surname].filter(Boolean).join(" ") : null, E.fullName, "fullName", A), R = Ot(D, E.documentNumber, A), z = $(D && (D.optionalData1 || D.optionalData2) ? [D.optionalData1, D.optionalData2].filter(Boolean).join(" ") : null, E.personalNumber, "personalNumber", A), B = $(D?.dateOfBirth, E.dateOfBirth, "dateOfBirth", A), V = $(D?.dateOfExpiry, E.dateOfExpiry, "dateOfExpiry", A), ee = $(null, E.dateOfIssue, "dateOfIssue", A), te = D?.sex && D.sex !== "Unspecified" ? D.sex : E.sex ?? "Unspecified";
-		D?.sex && D.sex !== "Unspecified" && E.sex ? A.sex = "MRZ+VIZ" : D?.sex && D.sex !== "Unspecified" ? A.sex = "MRZ" : E.sex && (A.sex = "VIZ");
-		let ne = $(null, E.placeOfBirth, "placeOfBirth", A), re = $(null, E.address, "address", A), ie = $(null, E.parents, "parents", A), H = $(null, E.issuingAuthority, "issuingAuthority", A), ae = $(null, E.licenseClass, "licenseClass", A), oe = $(null, E.restrictions, "restrictions", A), se = $(null, E.endorsements, "endorsements", A), ce = $(null, E.height, "height", A), le = $(null, E.eyeColor, "eyeColor", A), U = $(null, E.hairColor, "hairColor", A), W = wt(B);
-		W !== null && (A.age = "COMPUTED");
-		let pe = Tt(V);
-		pe !== null && (A.isExpired = "COMPUTED");
-		let me = Et(D, E.documentTypeHint), he = ue(j), ge = ue(M) ?? M, _e = Math.round(performance.now() - n), ve = {
-			coarseDegrees: C.coarse,
-			deskewDegrees: x,
-			totalDegrees: It(C.coarse + x),
-			autoDetected: g
+		let { preprocessed: N, cleanedFullText: P, vizData: F, mrzData: I, mrzRawText: L, mrzModelUsed: R, confidence: z } = M, B = {}, V = $(I?.issuingCountry, F.issuingCountry, "issuingCountry", B), H = $(I?.nationality, F.nationality, "nationality", B), U = $(I?.surname, F.surname, "surname", B), W = I?.surnames && I.surnames.length > 0 ? I.surnames : F.surnames.length > 0 ? F.surnames : U ? U.split(/\s+/).filter(Boolean) : [], ee = $(I?.givenNames, F.givenNames, "givenNames", B), te = I?.givenNamesList && I.givenNamesList.length > 0 ? I.givenNamesList : ee ? ee.split(/\s+/).filter(Boolean) : [], ne = $(I && (I.givenNames || I.surname) ? [I.givenNames, I.surname].filter(Boolean).join(" ") : null, F.fullName, "fullName", B), re = Ut(I, F.documentNumber, B), G = $(I && (I.optionalData1 || I.optionalData2) ? [I.optionalData1, I.optionalData2].filter(Boolean).join(" ") : null, F.personalNumber, "personalNumber", B), K = $(I?.dateOfBirth, F.dateOfBirth, "dateOfBirth", B), ie = $(I?.dateOfExpiry, F.dateOfExpiry, "dateOfExpiry", B), ae = $(null, F.dateOfIssue, "dateOfIssue", B), q = I?.sex && I.sex !== "Unspecified" ? I.sex : F.sex ?? "Unspecified";
+		I?.sex && I.sex !== "Unspecified" && F.sex ? B.sex = "MRZ+VIZ" : I?.sex && I.sex !== "Unspecified" ? B.sex = "MRZ" : F.sex && (B.sex = "VIZ");
+		let oe = $(null, F.placeOfBirth, "placeOfBirth", B), ue = $(null, F.address, "address", B), de = $(null, F.parents, "parents", B), J = $(null, F.issuingAuthority, "issuingAuthority", B), fe = $(null, F.licenseClass, "licenseClass", B), pe = $(null, F.restrictions, "restrictions", B), me = $(null, F.endorsements, "endorsements", B), he = $(null, F.height, "height", B), ge = $(null, F.eyeColor, "eyeColor", B), _e = $(null, F.hairColor, "hairColor", B), ve = zt(K);
+		ve !== null && (B.age = "COMPUTED");
+		let Y = Bt(ie);
+		Y !== null && (B.isExpired = "COMPUTED");
+		let X = Vt(I, F.documentTypeHint), ye = se(V), be = se(H) ?? H, xe = Math.round(performance.now() - n), Se = {
+			coarseDegrees: M.coarse,
+			deskewDegrees: A,
+			totalDegrees: Zt(M.coarse + A),
+			autoDetected: w
 		};
-		return h?.({
+		return S?.({
 			stage: "complete",
 			progress: 100,
 			message: "Scan complete"
 		}), {
-			documentType: me,
-			documentFormat: D ? D.format : "VISUAL_ONLY",
-			issuingCountry: j,
-			issuingCountryName: he,
-			documentNumber: R,
-			personalNumber: z,
-			surname: N,
-			surnames: P,
-			givenNames: F,
-			givenNamesList: I,
-			fullName: L,
-			nationality: M,
-			nationalityName: ge,
-			dateOfBirth: B,
-			age: W,
-			sex: te,
-			dateOfIssue: ee,
-			dateOfExpiry: V,
-			isExpired: pe,
-			placeOfBirth: ne,
-			address: re,
-			parents: ie,
-			issuingAuthority: H,
-			licenseClass: ae,
-			restrictions: oe,
-			endorsements: se,
-			height: ce,
-			eyeColor: le,
-			hairColor: U,
-			mrz: D,
-			unmappedFields: E.unmappedKeyValues,
-			fieldSources: A,
-			rawOcrText: T.trim(),
-			rawMrzText: O,
-			confidence: Math.round(k),
-			processingTimeMs: _e,
+			documentType: X,
+			documentFormat: I ? I.format : "VISUAL_ONLY",
+			issuingCountry: V,
+			issuingCountryName: ye,
+			documentNumber: re,
+			personalNumber: G,
+			surname: U,
+			surnames: W,
+			givenNames: ee,
+			givenNamesList: te,
+			fullName: ne,
+			nationality: H,
+			nationalityName: be,
+			dateOfBirth: K,
+			age: ve,
+			sex: q,
+			dateOfIssue: ae,
+			dateOfExpiry: ie,
+			isExpired: Y,
+			placeOfBirth: oe,
+			address: ue,
+			parents: de,
+			issuingAuthority: J,
+			licenseClass: fe,
+			restrictions: pe,
+			endorsements: me,
+			height: he,
+			eyeColor: ge,
+			hairColor: _e,
+			mrz: I,
+			mrzModel: R,
+			unmappedFields: F.unmappedKeyValues,
+			fieldSources: B,
+			rawOcrText: P.trim(),
+			rawMrzText: L,
+			confidence: Math.round(z),
+			processingTimeMs: xe,
 			sourceDimensions: {
-				width: w.width,
-				height: w.height
+				width: N.width,
+				height: N.height
 			},
-			orientation: ve,
-			perspective: y,
-			previews: u ? {
-				originalDataUrl: w.originalDataUrl,
-				enhancedDataUrl: w.enhancedDataUrl,
-				mrzCropDataUrl: w.mrzCropDataUrl
+			orientation: Se,
+			perspective: D,
+			quality: u ? O : void 0,
+			previews: p ? {
+				originalDataUrl: N.originalDataUrl,
+				enhancedDataUrl: N.enhancedDataUrl,
+				mrzCropDataUrl: N.mrzCropDataUrl
 			} : void 0
 		};
 	}
@@ -3204,18 +3630,18 @@ var Rt = class {
 		let { frontOptions: r, backOptions: i, onProgress: a, ...o } = n, s = await this.scan(e, {
 			...o,
 			...r,
-			onProgress: Lt(0, 48, a, "Front")
+			onProgress: Qt(0, 48, a, "Front")
 		}), c = await this.scan(t, {
 			...o,
 			...i,
-			onProgress: Lt(50, 46, a, "Back")
+			onProgress: Qt(50, 46, a, "Back")
 		});
 		a?.({
 			stage: "parsing",
 			progress: 98,
 			message: "Merging front & back fields and verifying consistency…"
 		});
-		let l = Je(s, c);
+		let l = qe(s, c);
 		return a?.({
 			stage: "complete",
 			progress: 100,
@@ -3223,15 +3649,19 @@ var Rt = class {
 		}), l;
 	}
 	async terminate() {
-		this.worker && (await this.worker.terminate(), this.worker = null, this.workerLang = null, this.workerConfigKey = null);
+		this.worker && (await this.worker.terminate(), this.worker = null, this.workerLang = null, this.workerConfigKey = null), this.mrzWorker && (await this.mrzWorker.terminate(), this.mrzWorker = null, this.mrzWorkerConfigKey = null), this.mrzOcrbFailed = !1;
 	}
 };
-async function zt(e, t = {}) {
-	let n = new Rt({
+async function en(e, t = {}) {
+	let n = new $t({
 		workerPath: t.workerPath,
 		corePath: t.corePath,
 		langPath: t.langPath,
-		workerBlobURL: t.workerBlobURL
+		workerBlobURL: t.workerBlobURL,
+		mrzModel: t.mrzModel,
+		mrzLanguage: t.mrzLanguage,
+		mrzLangPath: t.mrzLangPath,
+		mrzGzip: t.mrzGzip
 	});
 	try {
 		return await n.scan(e, t);
@@ -3239,12 +3669,16 @@ async function zt(e, t = {}) {
 		await n.terminate();
 	}
 }
-async function Bt(e, t, n = {}) {
-	let r = new Rt({
+async function tn(e, t, n = {}) {
+	let r = new $t({
 		workerPath: n.workerPath,
 		corePath: n.corePath,
 		langPath: n.langPath,
-		workerBlobURL: n.workerBlobURL
+		workerBlobURL: n.workerBlobURL,
+		mrzModel: n.mrzModel,
+		mrzLanguage: n.mrzLanguage,
+		mrzLangPath: n.mrzLangPath,
+		mrzGzip: n.mrzGzip
 	});
 	try {
 		return await r.scanPair(e, t, n);
@@ -3252,6 +3686,6 @@ async function Bt(e, t, n = {}) {
 		await r.terminate();
 	}
 }
-export { Rt as DocumentScanner, W as ICAO_COUNTRY_CODES, u as SCANNER_VERSION, ze as analyzeDocumentOrientation, G as computeCheckDigit, ot as detectDocumentQuad, de as loadImageElement, Je as mergeDocumentSides, ut as normalizeVisualDate, Qe as orderQuadCorners, Pe as parseMrzFromText, Ct as parseVizText, _e as preprocessDocumentImage, ue as resolveCountryName, fe as sampleDownscaledGrayscale, zt as scanDocumentImage, Bt as scanDocumentPair, ct as warpDocumentPerspective };
+export { yt as CameraAutoCapture, $t as DocumentScanner, oe as ICAO_COUNTRY_CODES, dt as QualityGateError, u as SCANNER_VERSION, Le as analyzeDocumentOrientation, _t as assessCanvasQuality, vt as assessImageQuality, _e as computeCheckDigit, ct as detectDocumentQuad, ce as loadImageElement, qe as mergeDocumentSides, St as normalizeVisualDate, Qe as orderQuadCorners, Me as parseMrzFromText, It as parseVizText, pe as preprocessDocumentImage, se as resolveCountryName, le as sampleDownscaledGrayscale, en as scanDocumentImage, tn as scanDocumentPair, ut as warpDocumentPerspective, bt as watchCameraAutoCapture };
 
-//# sourceMappingURL=docscan-ocr.v0.0.1.es.js.map
+//# sourceMappingURL=docscan-ocr.v0.0.3.es.js.map

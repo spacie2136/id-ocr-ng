@@ -10,6 +10,78 @@ export type MrzFormat = 'TD1' | 'TD2' | 'TD3' | 'MRVA' | 'MRVB';
 
 export type FieldSource = 'MRZ' | 'VIZ' | 'MRZ+VIZ' | 'COMPUTED';
 
+export type MrzOcrModel = 'ocrb' | 'standard';
+
+export type QualityIssueCode =
+  | 'too_blurry'
+  | 'glare_detected'
+  | 'too_dark'
+  | 'too_bright'
+  | 'no_document'
+  | 'camera_moving';
+
+export interface QualityGateOptions {
+  /** Minimum focus/edge sharpness score [0..100] required to pass (default: 34) */
+  minSharpness?: number;
+  /** Maximum fraction [0..1] of specular glare hotspot pixels inside ROI (default: 0.045) */
+  maxGlareRatio?: number;
+  /** Minimum mean luminance [0..255] before flagging underexposure (default: 48) */
+  minBrightness?: number;
+  /** Maximum mean luminance [0..255] before flagging washed-out overexposure (default: 242) */
+  maxBrightness?: number;
+  /** Require structured document text/edges or a detected card border (default: true) */
+  requireDocument?: boolean;
+  /** Maximum frame-to-frame luminance delta [0..255] for live camera stability (default: 5.5) */
+  maxMotionDelta?: number;
+}
+
+export interface ImageQualityReport {
+  /** True when all evaluated quality gates pass */
+  passed: boolean;
+  /** Combined quality score in [0..100] */
+  overallScore: number;
+  /** Focus / text-edge sharpness score in [0..100] */
+  sharpnessScore: number;
+  isSharp: boolean;
+  /** Fraction of document ROI affected by bright specular glare [0..1] */
+  glareRatio: number;
+  hasGlare: boolean;
+  /** Mean luminance [0..255] in the document ROI */
+  meanBrightness: number;
+  exposureStatus: 'ok' | 'too_dark' | 'too_bright';
+  /** Whether a card/document or readable text structure was found in frame */
+  documentDetected: boolean;
+  /** Automatically detected 4-corner document quad if visible against background */
+  detectedCorners: DocumentQuad | null;
+  /** Frame-to-frame steadiness [0..100] (100 for static single images) */
+  stabilityScore: number;
+  isStable: boolean;
+  motionDelta: number;
+  /** Active quality blockers preventing capture/pass */
+  issues: QualityIssueCode[];
+  /** Actionable human-readable prompt for live camera or upload UI */
+  guidance: string;
+}
+
+export interface CameraAutoCaptureOptions extends QualityGateOptions {
+  /** Frame sampling interval in milliseconds (default: 180) */
+  sampleIntervalMs?: number;
+  /** Number of consecutive passing stable frames before auto-shutter triggers (default: 3) */
+  requiredStableFrames?: number;
+  /** Output File MIME type on auto-capture (default: 'image/png') */
+  mimeType?: 'image/png' | 'image/jpeg' | 'image/webp';
+  /** Encoder quality [0..1] for JPEG/WebP captures (default: 0.94) */
+  captureQuality?: number;
+  /** Stop watching automatically once onAutoCapture fires (default: true) */
+  stopOnCapture?: boolean;
+  /** Fired every sampling tick with live quality metrics & lock progress [0..1] */
+  onQualityUpdate?: (report: ImageQualityReport, stabilityProgress: number) => void;
+  /** Fired when consecutive sharp, glare-free, aligned frames trigger auto-capture */
+  onAutoCapture?: (file: File, report: ImageQualityReport) => void;
+  /** Fired if frame capture encounters an error */
+  onError?: (error: Error) => void;
+}
+
 export interface Point2D {
   /** Normalized X coordinate in [0..1] relative to source image width */
   x: number;
@@ -147,6 +219,8 @@ export interface ExtractedIdentity {
   eyeColor: string | null;
   hairColor: string | null;
   mrz: MrzParsedData | null;
+  /** MRZ OCR model actually used for the dedicated MRZ pass ('ocrb' or 'standard') */
+  mrzModel?: MrzOcrModel;
   unmappedFields: Record<string, string>;
   fieldSources: Record<string, FieldSource>;
   rawOcrText: string;
@@ -156,6 +230,8 @@ export interface ExtractedIdentity {
   sourceDimensions: { width: number; height: number };
   orientation?: OrientationInfo;
   perspective?: PerspectiveInfo;
+  /** Client-side sharpness, glare, exposure, and framing evaluation */
+  quality?: ImageQualityReport;
   previews?: {
     originalDataUrl: string;
     enhancedDataUrl: string;
@@ -177,13 +253,14 @@ export interface MergedDocumentResult extends ExtractedIdentity {
   };
   /** Indicates how front and back sides were matched during merging */
   sideAssignment: 'front+back' | 'swapped_detected' | 'both_mrz' | 'visual_only';
-  /** Cross-side discrepancies detected between front and back scans */
+  /** Cross-side verification warnings when front and back disagree (e.g. different doc number or DOB) */
   conflicts: SideConsistencyConflict[];
   /** True when no key identity conflicts exist between front and back */
   sidesConsistent: boolean;
 }
 
 export type ScanStage =
+  | 'quality_check'
   | 'detecting_perspective'
   | 'detecting_orientation'
   | 'preprocessing'
@@ -208,10 +285,18 @@ export interface TesseractWorkerConfig {
   langPath?: string;
   /** Set false when loading workerPath directly without wrapping in a Blob URL */
   workerBlobURL?: boolean;
+  /** MRZ model to use for dedicated MRZ pass: 'ocrb' (default) or 'standard' (uses main language model) */
+  mrzModel?: MrzOcrModel;
+  /** Traineddata code for dedicated OCR-B MRZ worker (defaults to 'ocrb_int') */
+  mrzLanguage?: string;
+  /** Custom URL/path containing the OCR-B traineddata file (defaults to jsDelivr Shreeshrii/tessdata_ocrb) */
+  mrzLangPath?: string;
+  /** Whether the MRZ traineddata at mrzLangPath is .gz compressed (defaults to false) */
+  mrzGzip?: boolean;
 }
 
 export interface ScannerOptions extends TesseractWorkerConfig {
-  /** Tesseract language code(s), defaults to 'eng' */
+  /** Tesseract language code(s) for full-page VIZ OCR (and MRZ fallback), defaults to 'eng' */
   language?: string;
   /** Apply grayscale & contrast stretching before OCR (default: true) */
   preprocess?: boolean;
@@ -227,6 +312,12 @@ export interface ScannerOptions extends TesseractWorkerConfig {
   rotation?: 0 | 90 | 180 | 270;
   /** Fine clockwise deskew override in degrees when autoRotate is disabled (default: 0) */
   deskewDegrees?: number;
+  /** Evaluate sharpness, glare & exposure and attach `result.quality` (default: true) */
+  includeQualityReport?: boolean;
+  /** Throw QualityGateError before OCR if image quality fails thresholds (default: false) */
+  enforceQualityGate?: boolean;
+  /** Custom thresholds used by includeQualityReport and enforceQualityGate */
+  qualityGateOptions?: QualityGateOptions;
   /** Include processed preview data URLs in the result (default: true) */
   includePreviews?: boolean;
   /** Progress listener callback */

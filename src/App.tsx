@@ -8,6 +8,7 @@ import {
   type DocumentQuad,
   type ExtractedIdentity,
   type MergedDocumentResult,
+  type MrzOcrModel,
   type ScanProgress,
 } from './scanner';
 
@@ -40,6 +41,7 @@ export default function App() {
   const [manualCorners, setManualCorners] = useState<DocumentQuad | null>(null);
   const [preprocess, setPreprocess] = useState(true);
   const [enhanceMrzPass, setEnhanceMrzPass] = useState(true);
+  const [mrzModel, setMrzModel] = useState<MrzOcrModel>('ocrb');
 
   const [isScanning, setIsScanning] = useState(false);
   const [progress, setProgress] = useState<ScanProgress | null>(null);
@@ -85,6 +87,7 @@ export default function App() {
         corners: DocumentQuad | null;
         prep: boolean;
         mrzPass: boolean;
+        mrzModel: MrzOcrModel;
       }
     ) => {
       if (!scannerRef.current) {
@@ -101,6 +104,7 @@ export default function App() {
       try {
         const extracted = await scannerRef.current.scan(fileToScan, {
           language: 'eng',
+          mrzModel: opts.mrzModel,
           preprocess: opts.prep,
           enhanceMrzPass: opts.mrzPass,
           perspectiveCorrection: opts.persp,
@@ -148,6 +152,7 @@ export default function App() {
         persp: boolean;
         prep: boolean;
         mrzPass: boolean;
+        mrzModel: MrzOcrModel;
       }
     ) => {
       if (!scannerRef.current) {
@@ -164,6 +169,7 @@ export default function App() {
       try {
         const merged = await scannerRef.current.scanPair(fFile, bFile, {
           language: 'eng',
+          mrzModel: opts.mrzModel,
           preprocess: opts.prep,
           enhanceMrzPass: opts.mrzPass,
           perspectiveCorrection: opts.persp,
@@ -219,6 +225,7 @@ export default function App() {
       corners: null,
       prep: preprocess,
       mrzPass: enhanceMrzPass,
+      mrzModel,
     });
   };
 
@@ -249,6 +256,7 @@ export default function App() {
           persp: perspectiveCorrection,
           prep: preprocess,
           mrzPass: enhanceMrzPass,
+          mrzModel,
         });
       }
     } else {
@@ -261,6 +269,7 @@ export default function App() {
           persp: perspectiveCorrection,
           prep: preprocess,
           mrzPass: enhanceMrzPass,
+          mrzModel,
         });
       }
     }
@@ -305,6 +314,7 @@ export default function App() {
         persp: perspectiveCorrection,
         prep: preprocess,
         mrzPass: enhanceMrzPass,
+        mrzModel,
       });
       return;
     }
@@ -317,6 +327,7 @@ export default function App() {
       corners: manualCorners,
       prep: preprocess,
       mrzPass: enhanceMrzPass,
+      mrzModel,
     });
   };
 
@@ -436,7 +447,7 @@ export default function App() {
           </h1>
           <p className="text-sm text-slate-600 mt-1 max-w-3xl">
             {activeView === 'workbench'
-              ? 'Auto-rectifies 4-corner perspective, straightens rotated scans, merges front & back IDs, and extracts Machine Readable Zone check digits and Visual Inspection Zone fields client-side.'
+              ? 'Auto-rectifies 4-corner perspective, straightens rotated scans, merges front & back IDs, and extracts Machine Readable Zone check digits (OCR-B default) and Visual Inspection Zone fields client-side.'
               : activeView === 'history'
                 ? 'In-memory scans processed during this browser session. No document images or personal data leave your device.'
                 : 'Drop-in TypeScript module architecture designed to be copied or embedded via CDN straight into web applications.'}
@@ -463,6 +474,7 @@ export default function App() {
                 manualCorners={manualCorners}
                 preprocess={preprocess}
                 enhanceMrzPass={enhanceMrzPass}
+                mrzModel={mrzModel}
                 onChangeScanMode={(mode) => {
                   setScanMode(mode);
                   setResult(null);
@@ -478,6 +490,7 @@ export default function App() {
                 onChangeManualCorners={setManualCorners}
                 onTogglePreprocess={setPreprocess}
                 onToggleMrzPass={setEnhanceMrzPass}
+                onChangeMrzModel={setMrzModel}
                 onTriggerScan={handleTriggerScan}
               />
             </div>
@@ -568,6 +581,9 @@ export default function App() {
                                 if (item.result.previews?.originalDataUrl) {
                                   setPreviewUrl(item.result.previews.originalDataUrl);
                                 }
+                              }
+                              if (item.result.mrzModel) {
+                                setMrzModel(item.result.mrzModel);
                               }
                               setResult(item.result);
                               setActiveView('workbench');

@@ -6,6 +6,13 @@ export {
   orderQuadCorners,
   warpDocumentPerspective,
 } from './perspective';
+export {
+  assessImageQuality,
+  assessCanvasQuality,
+  CameraAutoCapture,
+  watchCameraAutoCapture,
+  QualityGateError,
+} from './qualityGate';
 export { parseMrzFromText, computeCheckDigit } from './mrzParser';
 export { parseVizText, normalizeVisualDate } from './vizParser';
 export {
@@ -16,6 +23,7 @@ export {
 export { analyzeDocumentOrientation, type OrientationAnalysis } from './orientation';
 export { ICAO_COUNTRY_CODES, resolveCountryName } from './countries';
 export type {
+  CameraAutoCaptureOptions,
   CheckDigitStatus,
   DocumentQuad,
   DocumentType,
@@ -23,14 +31,18 @@ export type {
   FieldSource,
   GrayscaleBuffer,
   ImageInput,
+  ImageQualityReport,
   MergedDocumentResult,
   MrzFormat,
+  MrzOcrModel,
   MrzParsedData,
   OrientationInfo,
   PairScanOptions,
   PerspectiveInfo,
   Point2D,
   PreprocessedResult,
+  QualityGateOptions,
+  QualityIssueCode,
   ScanProgress,
   ScanStage,
   ScannerOptions,

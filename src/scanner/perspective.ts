@@ -239,9 +239,83 @@ function interiorAnglesDeg(quad: DocumentQuad): number[] {
 }
 
 /**
+ * Signed margin test: returns true if point (px, py) lies inside the convex quad
+ * OR within `marginPx` outside any edge. Works regardless of clockwise/CCW ring winding.
+ */
+function isNearOrInsideConvexQuad(
+  px: number,
+  py: number,
+  ringPx: [Point2D, Point2D, Point2D, Point2D],
+  marginPx: number
+): boolean {
+  let sign = 0;
+  let minDist = Infinity;
+  let inside = true;
+
+  for (let i = 0; i < 4; i++) {
+    const a = ringPx[i];
+    const b = ringPx[(i + 1) % 4];
+    const c = (b.x - a.x) * (py - a.y) - (b.y - a.y) * (px - a.x);
+    if (Math.abs(c) > 1e-5) {
+      const s = c > 0 ? 1 : -1;
+      if (sign === 0) sign = s;
+      else if (s !== sign) inside = false;
+    }
+    const segD = pointToSegmentDistance({ x: px, y: py }, a, b).d;
+    if (segD < minDist) minDist = segD;
+  }
+
+  return inside || minDist <= marginPx;
+}
+
+/**
+ * Evaluates whether a quad side is genuinely supported by a continuous edge gradient
+ * ridge in the image along its interior span, rather than slicing arbitrarily across a page.
+ */
+function computeSideEdgeSupport(
+  aPx: Point2D,
+  bPx: Point2D,
+  edge: Float32Array,
+  w: number,
+  h: number
+): number {
+  const dx = bPx.x - aPx.x;
+  const dy = bPx.y - aPx.y;
+  const len = Math.hypot(dx, dy);
+  if (len < 12) return 0;
+
+  const nx = -dy / len;
+  const ny = dx / len;
+  const steps = Math.min(48, Math.max(18, Math.round(len * 0.4)));
+  let hits = 0;
+
+  for (let s = 0; s < steps; s++) {
+    const t = 0.08 + (0.84 * s) / Math.max(1, steps - 1);
+    const sx = aPx.x + dx * t;
+    const sy = aPx.y + dy * t;
+    let bestEdge = 0;
+
+    for (let off = -3; off <= 3; off += 1) {
+      const rx = Math.round(sx + nx * off);
+      const ry = Math.round(sy + ny * off);
+      if (rx >= 1 && rx < w - 1 && ry >= 1 && ry < h - 1) {
+        const val = edge[ry * w + rx];
+        if (val > bestEdge) bestEdge = val;
+      }
+    }
+
+    if (bestEdge >= 8.2) {
+      hits++;
+    }
+  }
+
+  return hits / steps;
+}
+
+/**
  * Pure-JS 4-corner document quadrilateral detector.
- * Returns null if the image is already a tightly cropped flat scan (or no reliable quad exists)
- * so flat full-bleed scans are never over-cropped.
+ * Returns null if the image is already a tightly cropped / full-bleed flat scan
+ * (or if no reliable document quad exists) so flat scans and MRZ zones are never over-cropped.
  */
 export function detectDocumentQuad(
   source: HTMLImageElement | HTMLCanvasElement
@@ -264,16 +338,19 @@ export function detectDocumentQuad(
 
   const rgba = ctx.getImageData(0, 0, w, h).data;
   const nPix = w * h;
-  const gray = new Float32Array(nPix);
-  for (let i = 0, p = 0; i < rgba.length; i += 4, p++) {
-    gray[p] = 0.299 * rgba[i] + 0.587 * rgba[i + 1] + 0.114 * rgba[i + 2];
-  }
 
-  // 3x3 light blur to suppress guilloche/micro-noise while preserving document borders
-  const smooth = new Float32Array(nPix);
+  // 3x3 lightly smoothed R, G, B & luminance suppresses camera sensor noise and wood grain
+  // while keeping background homogeneity intact.
+  const smoothR = new Float32Array(nPix);
+  const smoothG = new Float32Array(nPix);
+  const smoothB = new Float32Array(nPix);
+  const smoothLum = new Float32Array(nPix);
+
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
-      let sum = 0;
+      let sr = 0;
+      let sg = 0;
+      let sb = 0;
       let cnt = 0;
       for (let dy = -1; dy <= 1; dy++) {
         const yy = y + dy;
@@ -281,54 +358,126 @@ export function detectDocumentQuad(
         for (let dx = -1; dx <= 1; dx++) {
           const xx = x + dx;
           if (xx < 0 || xx >= w) continue;
-          sum += gray[yy * w + xx];
+          const o = (yy * w + xx) * 4;
+          sr += rgba[o];
+          sg += rgba[o + 1];
+          sb += rgba[o + 2];
           cnt++;
         }
       }
-      smooth[y * w + x] = sum / cnt;
+      const p = y * w + x;
+      const r = sr / cnt;
+      const g = sg / cnt;
+      const b = sb / cnt;
+      smoothR[p] = r;
+      smoothG[p] = g;
+      smoothB[p] = b;
+      smoothLum[p] = 0.299 * r + 0.587 * g + 0.114 * b;
     }
   }
 
-  // Compute Sobel gradient magnitude on smooth luminance + max RGB gradient
-  const grad = new Float32Array(nPix);
+  // Smoothed Sobel gradient + weighted unblurred max-RGB step gradient:
+  // keeps subtle 1px card edges on light desks sharp while ignoring single-pixel noise.
+  const smoothGrad = new Float32Array(nPix);
+  const smoothRgbEdge = new Float32Array(nPix);
+  const edge = new Float32Array(nPix);
+
+  const sobelMax = (arr: Float32Array, rowM: number, row0: number, rowP: number, x: number) => {
+    const gx =
+      -arr[rowM + x - 1] +
+      arr[rowM + x + 1] -
+      2 * arr[row0 + x - 1] +
+      2 * arr[row0 + x + 1] -
+      arr[rowP + x - 1] +
+      arr[rowP + x + 1];
+    const gy =
+      -arr[rowM + x - 1] -
+      2 * arr[rowM + x] -
+      arr[rowM + x + 1] +
+      arr[rowP + x - 1] +
+      2 * arr[rowP + x] +
+      arr[rowP + x + 1];
+    return Math.hypot(gx, gy) * 0.25;
+  };
+
   for (let y = 1; y < h - 1; y++) {
+    const rowM = (y - 1) * w;
+    const row0 = y * w;
+    const rowP = (y + 1) * w;
     for (let x = 1; x < w - 1; x++) {
-      const idx = y * w + x;
-      const gx =
-        -smooth[(y - 1) * w + (x - 1)] +
-        smooth[(y - 1) * w + (x + 1)] -
-        2 * smooth[y * w + (x - 1)] +
-        2 * smooth[y * w + (x + 1)] -
-        smooth[(y + 1) * w + (x - 1)] +
-        smooth[(y + 1) * w + (x + 1)];
-      const gy =
-        -smooth[(y - 1) * w + (x - 1)] -
-        2 * smooth[(y - 1) * w + x] -
-        smooth[(y - 1) * w + (x + 1)] +
-        smooth[(y + 1) * w + (x - 1)] +
-        2 * smooth[(y + 1) * w + x] +
-        smooth[(y + 1) * w + (x + 1)];
-      grad[idx] = Math.hypot(gx, gy) * 0.25;
+      const idx = row0 + x;
+      const lg = sobelMax(smoothLum, rowM, row0, rowP, x);
+      const rg = sobelMax(smoothR, rowM, row0, rowP, x);
+      const gg = sobelMax(smoothG, rowM, row0, rowP, x);
+      const bg = sobelMax(smoothB, rowM, row0, rowP, x);
+      const sEdge = Math.max(lg, rg, gg, bg);
+
+      let rawMaxG = 0;
+      const iTL = (rowM + x - 1) * 4;
+      const iT = (rowM + x) * 4;
+      const iTR = (rowM + x + 1) * 4;
+      const iL = (row0 + x - 1) * 4;
+      const iR = (row0 + x + 1) * 4;
+      const iBL = (rowP + x - 1) * 4;
+      const iB = (rowP + x) * 4;
+      const iBR = (rowP + x + 1) * 4;
+
+      for (let c = 0; c < 3; c++) {
+        const cx =
+          -rgba[iTL + c] +
+          rgba[iTR + c] -
+          2 * rgba[iL + c] +
+          2 * rgba[iR + c] -
+          rgba[iBL + c] +
+          rgba[iBR + c];
+        const cy =
+          -rgba[iTL + c] -
+          2 * rgba[iT + c] -
+          rgba[iTR + c] +
+          rgba[iBL + c] +
+          2 * rgba[iB + c] +
+          rgba[iBR + c];
+        const cg = Math.hypot(cx, cy) * 0.25;
+        if (cg > rawMaxG) rawMaxG = cg;
+      }
+
+      smoothGrad[idx] = lg;
+      smoothRgbEdge[idx] = sEdge;
+      edge[idx] = Math.max(sEdge, rawMaxG * 0.72);
     }
   }
 
-  // Estimate dominant border background color & check whether outer perimeter looks like background
-  const borderSamples: Array<{ r: number; g: number; b: number; grad: number; idx: number }> = [];
+  // Sample all 4 border strips individually to test whether a consistent desk/table
+  // background actually surrounds the document rather than full-bleed printing.
+  interface BorderSample {
+    r: number;
+    g: number;
+    b: number;
+    grad: number;
+    side: 0 | 1 | 2 | 3; // 0=top, 1=right, 2=bottom, 3=left
+  }
+  const borderSamples: BorderSample[] = [];
+  const pushBorderSample = (idx: number, side: 0 | 1 | 2 | 3) => {
+    borderSamples.push({
+      r: smoothR[idx],
+      g: smoothG[idx],
+      b: smoothB[idx],
+      grad: smoothGrad[idx],
+      side,
+    });
+  };
+
   for (let x = 2; x < w - 2; x += 2) {
-    borderSamples.push({ r: rgba[(2 * w + x) * 4], g: rgba[(2 * w + x) * 4 + 1], b: rgba[(2 * w + x) * 4 + 2], grad: grad[2 * w + x], idx: 2 * w + x });
-    const bot = (h - 3) * w + x;
-    borderSamples.push({ r: rgba[bot * 4], g: rgba[bot * 4 + 1], b: rgba[bot * 4 + 2], grad: grad[bot], idx: bot });
+    pushBorderSample(2 * w + x, 0);
+    pushBorderSample((h - 3) * w + x, 2);
   }
   for (let y = 2; y < h - 2; y += 2) {
-    const left = y * w + 2;
-    borderSamples.push({ r: rgba[left * 4], g: rgba[left * 4 + 1], b: rgba[left * 4 + 2], grad: grad[left], idx: left });
-    const right = y * w + (w - 3);
-    borderSamples.push({ r: rgba[right * 4], g: rgba[right * 4 + 1], b: rgba[right * 4 + 2], grad: grad[right], idx: right });
+    pushBorderSample(y * w + (w - 3), 1);
+    pushBorderSample(y * w + 2, 3);
   }
 
-  const smoothBorder = borderSamples.filter((s) => s.grad < 10);
-  // If less than 40% of border perimeter is smooth background, this is already a tight full-bleed scan
-  if (smoothBorder.length < borderSamples.length * 0.4) {
+  const smoothBorder = borderSamples.filter((s) => s.grad < 10.5);
+  if (smoothBorder.length < borderSamples.length * 0.45) {
     return null;
   }
 
@@ -340,24 +489,77 @@ export function detectDocumentQuad(
   const bgG = gs[Math.floor(gs.length / 2)];
   const bgB = bs[Math.floor(bs.length / 2)];
 
-  // Flood-fill background from perimeter seeds stopped by edges or color shift
+  const sideTotals = [0, 0, 0, 0];
+  const sideMatches = [0, 0, 0, 0];
+  let totalBgMatches = 0;
+
+  for (const s of borderSamples) {
+    sideTotals[s.side]++;
+    const diff = Math.max(Math.abs(s.r - bgR), Math.abs(s.g - bgG), Math.abs(s.b - bgB));
+    if (s.grad < 12 && diff < 44) {
+      sideMatches[s.side]++;
+      totalBgMatches++;
+    }
+  }
+
+  const sideMatchRatios = sideTotals.map((tot, i) => (tot > 0 ? sideMatches[i] / tot : 0));
+  const bgSidesCount = sideMatchRatios.filter((r) => r >= 0.45).length;
+  const strongBgSides = sideMatchRatios.filter((r) => r >= 0.65).length;
+  const overallBgRatio = totalBgMatches / Math.max(1, borderSamples.length);
+
+  // Full-bleed passports (like a bottom cream MRZ margin + blue top + portrait left) only match
+  // background on 1-2 sides. A framed/skewed photo on a desk has background on >=3 sides.
+  if (bgSidesCount < 3 || (strongBgSides < 2 && overallBgRatio < 0.68)) {
+    return null;
+  }
+
+  // Precompute anti-pinhole edge ridge mask: blocks strong edges (>= 9.5) AND pixels (>= 6.5)
+  // sandwiched inside >= 2 strong 8-connected edge neighbors so 1px anti-aliased corner gaps
+  // cannot leak flood-fill into cream MRZ paper on light-colored desks.
+  const strongBarrier = new Uint8Array(nPix);
+  for (let i = 0; i < nPix; i++) {
+    if (edge[i] >= 9.5) strongBarrier[i] = 1;
+  }
+  const barrierMask = new Uint8Array(strongBarrier);
+  for (let y = 1; y < h - 1; y++) {
+    const rowM = (y - 1) * w;
+    const row0 = y * w;
+    const rowP = (y + 1) * w;
+    for (let x = 1; x < w - 1; x++) {
+      const idx = row0 + x;
+      if (barrierMask[idx] || edge[idx] < 6.5) continue;
+      const edgeNeighbors =
+        strongBarrier[rowM + x - 1] +
+        strongBarrier[rowM + x] +
+        strongBarrier[rowM + x + 1] +
+        strongBarrier[row0 + x - 1] +
+        strongBarrier[row0 + x + 1] +
+        strongBarrier[rowP + x - 1] +
+        strongBarrier[rowP + x] +
+        strongBarrier[rowP + x + 1];
+      if (edgeNeighbors >= 2) {
+        barrierMask[idx] = 1;
+      }
+    }
+  }
+
+  // Flood-fill background from perimeter seeds using smoothed colors so camera grain on desks
+  // traverses cleanly while document border edges stop the fill tightly.
   const bgMask = new Uint8Array(nPix);
   const queue = new Int32Array(nPix);
   let qHead = 0;
   let qTail = 0;
 
-  const colorDistToBg = (pixIdx: number) => {
-    const o = pixIdx * 4;
-    return Math.max(
-      Math.abs(rgba[o] - bgR),
-      Math.abs(rgba[o + 1] - bgG),
-      Math.abs(rgba[o + 2] - bgB)
+  const colorDistToBg = (pixIdx: number) =>
+    Math.max(
+      Math.abs(smoothR[pixIdx] - bgR),
+      Math.abs(smoothG[pixIdx] - bgG),
+      Math.abs(smoothB[pixIdx] - bgB)
     );
-  };
 
   const trySeed = (pixIdx: number) => {
-    if (bgMask[pixIdx]) return;
-    if (grad[pixIdx] < 12 && colorDistToBg(pixIdx) < 42) {
+    if (bgMask[pixIdx] || barrierMask[pixIdx]) return;
+    if (edge[pixIdx] < 10.5 && colorDistToBg(pixIdx) < 42) {
       bgMask[pixIdx] = 1;
       queue[qTail++] = pixIdx;
     }
@@ -374,18 +576,16 @@ export function detectDocumentQuad(
 
   if (qTail === 0) return null;
 
-  const edgeBarrier = 13.5;
   const maxBgColorShift = 46;
-  const stepColorJump = 18;
+  const stepColorJump = 14;
 
   while (qHead < qTail) {
     const curr = queue[qHead++];
     const cx = curr % w;
     const cy = (curr / w) | 0;
-    const co = curr * 4;
-    const cr = rgba[co];
-    const cg = rgba[co + 1];
-    const cb = rgba[co + 2];
+    const cr = smoothR[curr];
+    const cg = smoothG[curr];
+    const cb = smoothB[curr];
 
     const neighbors = [
       cx > 0 ? curr - 1 : -1,
@@ -396,14 +596,12 @@ export function detectDocumentQuad(
 
     for (let k = 0; k < 4; k++) {
       const nxt = neighbors[k];
-      if (nxt < 0 || bgMask[nxt]) continue;
-      if (grad[nxt] >= edgeBarrier) continue;
+      if (nxt < 0 || bgMask[nxt] || barrierMask[nxt]) continue;
 
-      const no = nxt * 4;
       const stepDelta = Math.max(
-        Math.abs(rgba[no] - cr),
-        Math.abs(rgba[no + 1] - cg),
-        Math.abs(rgba[no + 2] - cb)
+        Math.abs(smoothR[nxt] - cr),
+        Math.abs(smoothG[nxt] - cg),
+        Math.abs(smoothB[nxt] - cb)
       );
       if (stepDelta > stepColorJump) continue;
       if (colorDistToBg(nxt) > maxBgColorShift) continue;
@@ -456,7 +654,7 @@ export function detectDocumentQuad(
   }
 
   const rawAreaRatio = bestPixels.length / nPix;
-  if (rawAreaRatio < 0.14 || rawAreaRatio > 0.94) {
+  if (rawAreaRatio < 0.14 || rawAreaRatio > 0.93) {
     return null;
   }
 
@@ -516,8 +714,141 @@ export function detectDocumentQuad(
     quad.bottomRight,
     quad.bottomLeft,
   ]);
-  if (quadAreaRatio < 0.14 || quadAreaRatio > 0.95) {
+  if (quadAreaRatio < 0.14 || quadAreaRatio > 0.93) {
     return null;
+  }
+
+  // Guard 1: Reject frame-hugging partial cuts (e.g. top+left+right hugging borders while slicing MRZ)
+  const borderTol = 0.028;
+  const nearTop = (p: Point2D) => p.y <= borderTol;
+  const nearRight = (p: Point2D) => p.x >= 1 - borderTol;
+  const nearBottom = (p: Point2D) => p.y >= 1 - borderTol;
+  const nearLeft = (p: Point2D) => p.x <= borderTol;
+
+  const sideHugsFrame = [
+    nearTop(quad.topLeft) && nearTop(quad.topRight),
+    nearRight(quad.topRight) && nearRight(quad.bottomRight),
+    nearBottom(quad.bottomRight) && nearBottom(quad.bottomLeft),
+    nearLeft(quad.bottomLeft) && nearLeft(quad.topLeft),
+  ];
+  const frameHuggingSides = sideHugsFrame.filter(Boolean).length;
+
+  const insetCornersCount = [
+    quad.topLeft,
+    quad.topRight,
+    quad.bottomRight,
+    quad.bottomLeft,
+  ].filter(
+    (p) => p.x > 0.028 && p.x < 0.972 && p.y > 0.028 && p.y < 0.972
+  ).length;
+
+  if (frameHuggingSides >= 2 || insetCornersCount < 2) {
+    return null;
+  }
+
+  // Guard 2: Verify every interior quad side follows a real collinear physical edge
+  const ringPx: [Point2D, Point2D, Point2D, Point2D] = [
+    { x: quad.topLeft.x * w, y: quad.topLeft.y * h },
+    { x: quad.topRight.x * w, y: quad.topRight.y * h },
+    { x: quad.bottomRight.x * w, y: quad.bottomRight.y * h },
+    { x: quad.bottomLeft.x * w, y: quad.bottomLeft.y * h },
+  ];
+
+  const interiorEdgeSupports: number[] = [];
+  for (let i = 0; i < 4; i++) {
+    if (sideHugsFrame[i]) continue;
+    const sup = computeSideEdgeSupport(ringPx[i], ringPx[(i + 1) % 4], edge, w, h);
+    interiorEdgeSupports.push(sup);
+  }
+  if (interiorEdgeSupports.length > 0) {
+    const minEdgeSup = Math.min(...interiorEdgeSupports);
+    const meanEdgeSup =
+      interiorEdgeSupports.reduce((s, v) => s + v, 0) / interiorEdgeSupports.length;
+    if (minEdgeSup < 0.42 || meanEdgeSup < 0.56) {
+      return null;
+    }
+  }
+
+  // Guard 3: Excluded-region ink & disconnected glyph-island check using smoothed pixels so
+  // camera sensor grain / wood desk texture passes cleanly while cropped MRZ text/ink is rejected.
+  const marginPx = 3.5;
+  const outsideVisited = new Uint8Array(nPix);
+  const bgLum = 0.299 * bgR + 0.587 * bgG + 0.114 * bgB;
+  let outsidePixels = 0;
+  let outsideHighContrastEdges = 0;
+  let outsideDarkInk = 0;
+  let outsideFgComponents = 0;
+
+  for (let y = 1; y < h - 1; y++) {
+    const rowOff = y * w;
+    for (let x = 1; x < w - 1; x++) {
+      const idx = rowOff + x;
+      if (isNearOrInsideConvexQuad(x, y, ringPx, marginPx)) continue;
+
+      outsidePixels++;
+      const gVal = smoothRgbEdge[idx];
+      const bgDiff = colorDistToBg(idx);
+      const lumDiff = bgLum - smoothLum[idx];
+
+      if (gVal >= 14 && bgDiff >= 24) {
+        outsideHighContrastEdges++;
+      }
+      if (lumDiff >= 38 && gVal >= 10) {
+        outsideDarkInk++;
+      }
+
+      if (!bgMask[idx] && !outsideVisited[idx]) {
+        // Count compact disconnected foreground islands strictly outside the expanded quad
+        let head = 0;
+        let tail = 0;
+        outsideVisited[idx] = 1;
+        compQueue[tail++] = idx;
+        let strongCount = 0;
+
+        while (head < tail) {
+          const curr = compQueue[head++];
+          if (smoothRgbEdge[curr] >= 10 || colorDistToBg(curr) >= 32) {
+            strongCount++;
+          }
+          const cx = curr % w;
+          const cy = (curr / w) | 0;
+          const nbrs = [
+            cx > 1 ? curr - 1 : -1,
+            cx < w - 2 ? curr + 1 : -1,
+            cy > 1 ? curr - w : -1,
+            cy < h - 2 ? curr + w : -1,
+          ];
+          for (let k = 0; k < 4; k++) {
+            const nxt = nbrs[k];
+            if (
+              nxt >= 0 &&
+              !bgMask[nxt] &&
+              !outsideVisited[nxt] &&
+              !isNearOrInsideConvexQuad(nxt % w, (nxt / w) | 0, ringPx, marginPx)
+            ) {
+              outsideVisited[nxt] = 1;
+              compQueue[tail++] = nxt;
+            }
+          }
+        }
+
+        if (tail >= 3 && strongCount >= 3) {
+          outsideFgComponents++;
+        }
+      }
+    }
+  }
+
+  if (outsidePixels > 0) {
+    const outsideEdgeRatio = outsideHighContrastEdges / outsidePixels;
+    if (
+      outsideFgComponents >= 7 ||
+      outsideDarkInk >= Math.max(24, Math.round(nPix * 0.0025)) ||
+      outsideEdgeRatio > 0.015 ||
+      outsideHighContrastEdges > Math.max(48, Math.round(nPix * 0.0055))
+    ) {
+      return null;
+    }
   }
 
   const topLenPx = dist(
@@ -576,17 +907,10 @@ export function detectDocumentQuad(
     Math.abs(botAngle * radToDeg)
   );
 
-  const insetCornersCount = [
-    quad.topLeft,
-    quad.topRight,
-    quad.bottomRight,
-    quad.bottomLeft,
-  ].filter((p) => p.x > 0.03 && p.x < 0.97 && p.y > 0.03 && p.y < 0.97).length;
-
   const hasPerspectiveSkew =
     trapezoidDeltaDeg >= 1.8 || lenSkewRatio >= 0.04 || tiltDeg >= 2.2;
   const hasSignificantBackgroundCrop =
-    quadAreaRatio <= 0.86 && insetCornersCount >= 3;
+    quadAreaRatio <= 0.88 && insetCornersCount >= 3;
 
   if (!hasPerspectiveSkew && !hasSignificantBackgroundCrop) {
     return null;

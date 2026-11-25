@@ -3,17 +3,23 @@ export declare class DocumentScanner {
     private worker;
     private workerLang;
     private workerConfigKey;
+    private mrzWorker;
+    private mrzWorkerConfigKey;
+    private mrzOcrbFailed;
     private defaultWorkerConfig;
     private activeStageCallback;
     private activeStage;
     constructor(workerConfig?: TesseractWorkerConfig);
+    private mergeWorkerConfig;
+    private createLoggerOption;
     private ensureWorker;
+    private ensureMrzWorker;
     private runOrientationPass;
     private runLightweightProbe;
     scan(input: ImageInput, options?: ScannerOptions): Promise<ExtractedIdentity>;
     /**
      * Scans both the front and back images of a two-sided document (ID card, residence permit,
-     * or driver license) reusing the same warm OCR worker and merges both sides into one
+     * or driver license) reusing warm OCR workers across both sides and merges them into one
      * unified ExtractedIdentity with cross-side consistency checks.
      */
     scanPair(front: ImageInput, back: ImageInput, options?: PairScanOptions): Promise<MergedDocumentResult>;

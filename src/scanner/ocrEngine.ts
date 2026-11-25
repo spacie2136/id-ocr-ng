@@ -13,13 +13,16 @@ import {
   orderQuadCorners,
   warpDocumentPerspective,
 } from './perspective';
+import { assessImageQuality, QualityGateError } from './qualityGate';
 import type {
   DocumentType,
   ExtractedIdentity,
   FieldSource,
   GrayscaleBuffer,
   ImageInput,
+  ImageQualityReport,
   MergedDocumentResult,
+  MrzOcrModel,
   MrzParsedData,
   OrientationInfo,
   PairScanOptions,
@@ -32,6 +35,9 @@ import type {
   VizParsedData,
 } from './types';
 import { parseVizText } from './vizParser';
+
+const DEFAULT_MRZ_OCRB_LANG = 'ocrb_int';
+const DEFAULT_MRZ_OCRB_LANG_PATH = 'https://cdn.jsdelivr.net/gh/Shreeshrii/tessdata_ocrb@master';
 
 function computeAge(dobIso: string | null): number | null {
   if (!dobIso) return null;
@@ -614,6 +620,7 @@ interface OrientationPassResult {
   vizData: VizParsedData;
   mrzData: MrzParsedData | null;
   mrzRawText: string;
+  mrzModelUsed: MrzOcrModel;
   confidence: number;
   probeScore: number;
   isConfidentUpright: boolean;
@@ -686,12 +693,51 @@ export class DocumentScanner {
   private worker: Worker | null = null;
   private workerLang: string | null = null;
   private workerConfigKey: string | null = null;
+
+  private mrzWorker: Worker | null = null;
+  private mrzWorkerConfigKey: string | null = null;
+  private mrzOcrbFailed = false;
+
   private defaultWorkerConfig: TesseractWorkerConfig;
   private activeStageCallback: ((p: ScanProgress) => void) | null = null;
   private activeStage: ScanProgress['stage'] = 'initializing_ocr';
 
   constructor(workerConfig: TesseractWorkerConfig = {}) {
     this.defaultWorkerConfig = { ...workerConfig };
+  }
+
+  private mergeWorkerConfig(override: TesseractWorkerConfig): TesseractWorkerConfig {
+    return {
+      workerPath: override.workerPath ?? this.defaultWorkerConfig.workerPath,
+      corePath: override.corePath ?? this.defaultWorkerConfig.corePath,
+      langPath: override.langPath ?? this.defaultWorkerConfig.langPath,
+      workerBlobURL: override.workerBlobURL ?? this.defaultWorkerConfig.workerBlobURL,
+      mrzModel: override.mrzModel ?? this.defaultWorkerConfig.mrzModel ?? 'ocrb',
+      mrzLanguage: override.mrzLanguage ?? this.defaultWorkerConfig.mrzLanguage,
+      mrzLangPath: override.mrzLangPath ?? this.defaultWorkerConfig.mrzLangPath,
+      mrzGzip: override.mrzGzip ?? this.defaultWorkerConfig.mrzGzip,
+    };
+  }
+
+  private createLoggerOption(stageFilter: 'full' | 'mrz') {
+    return (info: { status: string; progress?: number }) => {
+      if (!this.activeStageCallback) return;
+      if (info.status === 'recognizing text') {
+        if (stageFilter === 'full' && this.activeStage !== 'recognizing_full') return;
+        if (stageFilter === 'mrz' && this.activeStage !== 'recognizing_mrz') return;
+        const base = this.activeStage === 'recognizing_full' ? 25 : 65;
+        const span = this.activeStage === 'recognizing_full' ? 35 : 25;
+        const pct = Math.round(base + (info.progress || 0) * span);
+        this.activeStageCallback({
+          stage: this.activeStage,
+          progress: pct,
+          message:
+            this.activeStage === 'recognizing_full'
+              ? 'Reading document text & visual inspection zone…'
+              : 'Running dedicated OCR-B MRZ strip verification…',
+        });
+      }
+    };
   }
 
   private async ensureWorker(
@@ -701,13 +747,13 @@ export class DocumentScanner {
   ): Promise<Worker> {
     this.activeStageCallback = onProgress ?? null;
 
-    const mergedConfig: TesseractWorkerConfig = {
-      workerPath: workerConfig.workerPath ?? this.defaultWorkerConfig.workerPath,
-      corePath: workerConfig.corePath ?? this.defaultWorkerConfig.corePath,
-      langPath: workerConfig.langPath ?? this.defaultWorkerConfig.langPath,
-      workerBlobURL: workerConfig.workerBlobURL ?? this.defaultWorkerConfig.workerBlobURL,
-    };
-    const configKey = JSON.stringify(mergedConfig);
+    const mergedConfig = this.mergeWorkerConfig(workerConfig);
+    const configKey = JSON.stringify({
+      workerPath: mergedConfig.workerPath,
+      corePath: mergedConfig.corePath,
+      langPath: mergedConfig.langPath,
+      workerBlobURL: mergedConfig.workerBlobURL,
+    });
 
     if (
       this.worker &&
@@ -730,22 +776,7 @@ export class DocumentScanner {
     });
 
     const tesseractWorkerOptions: Record<string, unknown> = {
-      logger: (info: { status: string; progress?: number }) => {
-        if (!this.activeStageCallback) return;
-        if (info.status === 'recognizing text') {
-          const base = this.activeStage === 'recognizing_full' ? 25 : 65;
-          const span = this.activeStage === 'recognizing_full' ? 35 : 25;
-          const pct = Math.round(base + (info.progress || 0) * span);
-          this.activeStageCallback({
-            stage: this.activeStage,
-            progress: pct,
-            message:
-              this.activeStage === 'recognizing_full'
-                ? 'Reading document text & visual inspection zone…'
-                : 'Running high-contrast MRZ strip verification…',
-          });
-        }
-      },
+      logger: this.createLoggerOption('full'),
     };
 
     if (mergedConfig.workerPath) tesseractWorkerOptions.workerPath = mergedConfig.workerPath;
@@ -771,9 +802,89 @@ export class DocumentScanner {
     return worker;
   }
 
+  private async ensureMrzWorker(
+    fallbackWorker: Worker,
+    workerConfig: TesseractWorkerConfig,
+    onProgress?: (p: ScanProgress) => void
+  ): Promise<{ worker: Worker; modelUsed: MrzOcrModel }> {
+    this.activeStageCallback = onProgress ?? null;
+    const merged = this.mergeWorkerConfig(workerConfig);
+    const requestedModel: MrzOcrModel = merged.mrzModel ?? 'ocrb';
+
+    if (requestedModel === 'standard') {
+      return { worker: fallbackWorker, modelUsed: 'standard' };
+    }
+
+    const mrzLang = merged.mrzLanguage ?? DEFAULT_MRZ_OCRB_LANG;
+    const mrzLangPath = merged.mrzLangPath ?? DEFAULT_MRZ_OCRB_LANG_PATH;
+    const mrzGzip = merged.mrzGzip ?? false;
+
+    const mrzConfigKey = JSON.stringify({
+      workerPath: merged.workerPath,
+      corePath: merged.corePath,
+      workerBlobURL: merged.workerBlobURL,
+      mrzLang,
+      mrzLangPath,
+      mrzGzip,
+    });
+
+    if (this.mrzWorker && this.mrzWorkerConfigKey === mrzConfigKey) {
+      return { worker: this.mrzWorker, modelUsed: 'ocrb' };
+    }
+
+    if (this.mrzOcrbFailed && this.mrzWorkerConfigKey === mrzConfigKey) {
+      return { worker: fallbackWorker, modelUsed: 'standard' };
+    }
+
+    if (this.mrzWorker) {
+      await this.mrzWorker.terminate();
+      this.mrzWorker = null;
+    }
+
+    try {
+      this.activeStage = 'initializing_ocr';
+      onProgress?.({
+        stage: 'initializing_ocr',
+        progress: 14,
+        message: 'Loading specialized OCR-B MRZ recognition model…',
+      });
+
+      const mrzOptions: Record<string, unknown> = {
+        langPath: mrzLangPath,
+        gzip: mrzGzip,
+        logger: this.createLoggerOption('mrz'),
+      };
+      if (merged.workerPath) mrzOptions.workerPath = merged.workerPath;
+      if (merged.corePath) mrzOptions.corePath = merged.corePath;
+      if (merged.workerBlobURL !== undefined) {
+        mrzOptions.workerBlobURL = merged.workerBlobURL;
+      }
+
+      const worker = await createWorker(
+        mrzLang,
+        1,
+        mrzOptions,
+        {
+          load_system_dawg: '0',
+          load_freq_dawg: '0',
+        }
+      );
+
+      this.mrzWorker = worker;
+      this.mrzWorkerConfigKey = mrzConfigKey;
+      this.mrzOcrbFailed = false;
+      return { worker, modelUsed: 'ocrb' };
+    } catch {
+      this.mrzWorkerConfigKey = mrzConfigKey;
+      this.mrzOcrbFailed = true;
+      return { worker: fallbackWorker, modelUsed: 'standard' };
+    }
+  }
+
   private async runOrientationPass(
     surface: HTMLImageElement | HTMLCanvasElement,
-    worker: Worker,
+    vizWorker: Worker,
+    workerConfig: TesseractWorkerConfig,
     coarse: 0 | 90 | 180 | 270,
     deskewDegrees: number,
     preprocess: boolean,
@@ -796,7 +907,7 @@ export class DocumentScanner {
       });
     }
 
-    await worker.setParameters({
+    await vizWorker.setParameters({
       tessedit_pageseg_mode: PSM.SPARSE_TEXT,
       tessedit_char_whitelist: '',
     });
@@ -804,16 +915,16 @@ export class DocumentScanner {
     const fullInputUrl = preprocess
       ? preprocessed.enhancedDataUrl
       : preprocessed.originalDataUrl;
-    let fullResult = await worker.recognize(fullInputUrl, {}, { blocks: true });
+    let fullResult = await vizWorker.recognize(fullInputUrl, {}, { blocks: true });
     let fullText = fullResult.data.text || '';
     let fullConfidence = fullResult.data.confidence || 0;
 
     if (fullText.trim().split(/\r?\n/).filter(Boolean).length < 2) {
-      await worker.setParameters({
+      await vizWorker.setParameters({
         tessedit_pageseg_mode: PSM.AUTO,
         tessedit_char_whitelist: '',
       });
-      const autoResult = await worker.recognize(fullInputUrl, {}, { blocks: true });
+      const autoResult = await vizWorker.recognize(fullInputUrl, {}, { blocks: true });
       if ((autoResult.data.text || '').trim().length > fullText.trim().length) {
         fullResult = autoResult;
         fullText = autoResult.data.text || '';
@@ -830,24 +941,33 @@ export class DocumentScanner {
     if (pass1Mrz) candidates.push(pass1Mrz);
 
     let mrzRawText = '';
+    let mrzModelUsed: MrzOcrModel =
+      workerConfig.mrzModel ?? this.defaultWorkerConfig.mrzModel ?? 'ocrb';
 
     if (enhanceMrzPass) {
+      const mrzResolved = await this.ensureMrzWorker(vizWorker, workerConfig, onProgress);
+      const mrzWorker = mrzResolved.worker;
+      mrzModelUsed = mrzResolved.modelUsed;
+
       if (emitProgress) {
         this.activeStage = 'recognizing_mrz';
         onProgress?.({
           stage: 'recognizing_mrz',
           progress: 65,
-          message: 'Running high-contrast MRZ strip verification…',
+          message:
+            mrzModelUsed === 'ocrb'
+              ? 'Running dedicated OCR-B MRZ strip verification…'
+              : 'Running high-contrast MRZ strip verification…',
         });
       }
 
-      await worker.setParameters({
+      await mrzWorker.setParameters({
         tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
         tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<',
       });
 
       const runMrzStrip = async (stripUrl: string, stripGray: GrayscaleBuffer) => {
-        const mrzResult = await worker.recognize(stripUrl, {}, { blocks: true });
+        const mrzResult = await mrzWorker.recognize(stripUrl, {}, { blocks: true });
         const rawTxt = (mrzResult.data.text || '').trim();
         if (rawTxt && !mrzRawText) mrzRawText = rawTxt;
 
@@ -915,6 +1035,7 @@ export class DocumentScanner {
       vizData,
       mrzData,
       mrzRawText,
+      mrzModelUsed,
       confidence: fullConfidence,
       probeScore,
       isConfidentUpright,
@@ -961,13 +1082,31 @@ export class DocumentScanner {
       corners: manualCorners,
       rotation = 0,
       deskewDegrees: manualDeskew = 0,
+      includeQualityReport = true,
+      enforceQualityGate = false,
+      qualityGateOptions,
       includePreviews = true,
       workerPath,
       corePath,
       langPath,
       workerBlobURL,
+      mrzModel,
+      mrzLanguage,
+      mrzLangPath,
+      mrzGzip,
       onProgress,
     } = options;
+
+    const workerConfig: TesseractWorkerConfig = {
+      workerPath,
+      corePath,
+      langPath,
+      workerBlobURL,
+      mrzModel,
+      mrzLanguage,
+      mrzLangPath,
+      mrzGzip,
+    };
 
     const autoRotate =
       options.autoRotate !== undefined
@@ -1039,11 +1178,22 @@ export class DocumentScanner {
       }
     }
 
-    const worker = await this.ensureWorker(
-      language,
-      { workerPath, corePath, langPath, workerBlobURL },
-      onProgress
-    );
+    let qualityReport: ImageQualityReport | undefined;
+    if (includeQualityReport || enforceQualityGate) {
+      if (enforceQualityGate) {
+        onProgress?.({
+          stage: 'quality_check',
+          progress: 11,
+          message: 'Evaluating sharpness, glare & exposure quality gate…',
+        });
+      }
+      qualityReport = await assessImageQuality(workingSurface, qualityGateOptions);
+      if (enforceQualityGate && !qualityReport.passed) {
+        throw new QualityGateError(qualityReport);
+      }
+    }
+
+    const worker = await this.ensureWorker(language, workerConfig, onProgress);
 
     let deskewDegrees = manualDeskew;
     let candidateOrder: Array<0 | 90 | 180 | 270> = [rotation];
@@ -1063,6 +1213,7 @@ export class DocumentScanner {
     let bestPass = await this.runOrientationPass(
       workingSurface,
       worker,
+      workerConfig,
       candidateOrder[0],
       deskewDegrees,
       preprocess,
@@ -1104,6 +1255,7 @@ export class DocumentScanner {
         bestPass = await this.runOrientationPass(
           workingSurface,
           worker,
+          workerConfig,
           bestProbeRot,
           deskewDegrees,
           preprocess,
@@ -1120,7 +1272,7 @@ export class DocumentScanner {
       message: 'Extracting personal fields & verifying ICAO 9303 check digits…',
     });
 
-    const { preprocessed, cleanedFullText, vizData, mrzData, mrzRawText, confidence } = bestPass;
+    const { preprocessed, cleanedFullText, vizData, mrzData, mrzRawText, mrzModelUsed, confidence } = bestPass;
     const fieldSources: Record<string, FieldSource> = {};
 
     const issuingCountry = pickField(
@@ -1280,6 +1432,7 @@ export class DocumentScanner {
       eyeColor,
       hairColor,
       mrz: mrzData,
+      mrzModel: mrzModelUsed,
       unmappedFields: vizData.unmappedKeyValues,
       fieldSources,
       rawOcrText: cleanedFullText.trim(),
@@ -1292,6 +1445,7 @@ export class DocumentScanner {
       },
       orientation,
       perspective: perspectiveInfo,
+      quality: includeQualityReport ? qualityReport : undefined,
       previews: includePreviews
         ? {
             originalDataUrl: preprocessed.originalDataUrl,
@@ -1304,7 +1458,7 @@ export class DocumentScanner {
 
   /**
    * Scans both the front and back images of a two-sided document (ID card, residence permit,
-   * or driver license) reusing the same warm OCR worker and merges both sides into one
+   * or driver license) reusing warm OCR workers across both sides and merges them into one
    * unified ExtractedIdentity with cross-side consistency checks.
    */
   async scanPair(
@@ -1350,6 +1504,12 @@ export class DocumentScanner {
       this.workerLang = null;
       this.workerConfigKey = null;
     }
+    if (this.mrzWorker) {
+      await this.mrzWorker.terminate();
+      this.mrzWorker = null;
+      this.mrzWorkerConfigKey = null;
+    }
+    this.mrzOcrbFailed = false;
   }
 }
 
@@ -1362,6 +1522,10 @@ export async function scanDocumentImage(
     corePath: options.corePath,
     langPath: options.langPath,
     workerBlobURL: options.workerBlobURL,
+    mrzModel: options.mrzModel,
+    mrzLanguage: options.mrzLanguage,
+    mrzLangPath: options.mrzLangPath,
+    mrzGzip: options.mrzGzip,
   });
   try {
     return await scanner.scan(input, options);
@@ -1380,6 +1544,10 @@ export async function scanDocumentPair(
     corePath: options.corePath,
     langPath: options.langPath,
     workerBlobURL: options.workerBlobURL,
+    mrzModel: options.mrzModel,
+    mrzLanguage: options.mrzLanguage,
+    mrzLangPath: options.mrzLangPath,
+    mrzGzip: options.mrzGzip,
   });
   try {
     return await scanner.scanPair(front, back, options);

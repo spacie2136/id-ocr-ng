@@ -5,84 +5,91 @@ import { SCANNER_VERSION } from '../scanner';
 const UMD_SNIPPET = `<!-- Always use the latest build via GitHub + jsDelivr (or pin @v${SCANNER_VERSION}/.../docscan-ocr.v${SCANNER_VERSION}.umd.js) -->
 <script src="https://cdn.jsdelivr.net/gh/<USERNAME>/<REPO>@main/public/lib/docscan-ocr.latest.umd.js"></script>
 <script>
-  const { DocumentScanner, SCANNER_VERSION } = window.DocScanOCR;
+  const { DocumentScanner, watchCameraAutoCapture, SCANNER_VERSION } = window.DocScanOCR;
   console.log('Loaded DocScan OCR v' + SCANNER_VERSION);
 
   const scanner = new DocumentScanner();
 
-  // Single document with 4-corner perspective correction + auto-rotate
-  const identity = await scanner.scan(file, {
-    perspectiveCorrection: true,
-    autoRotate: true,
-    preprocess: true,
-    enhanceMrzPass: true,
+  // Live camera auto-capture with sharpness, glare, lighting & stability gates
+  const watcher = watchCameraAutoCapture(videoElement, {
+    requiredStableFrames: 3,
+    onQualityUpdate: (report, lockProgress) => {
+      console.log(report.guidance, 'Sharpness:', report.sharpnessScore, Math.round(lockProgress * 100) + '%');
+    },
+    onAutoCapture: async (capturedFile) => {
+      const identity = await scanner.scan(capturedFile, {
+        perspectiveCorrection: true,
+        autoRotate: true,
+        mrzModel: 'ocrb',
+      });
+      console.log(identity);
+    },
   });
-
-  // Or scan & merge front + back sides of a national ID / residence permit
-  const merged = await scanner.scanPair(frontFile, backFile, {
-    perspectiveCorrection: true,
-    autoRotate: true,
-  });
-  console.log(merged.fullName, merged.address, merged.sidesConsistent, merged.conflicts);
 </script>`;
 
 const ESM_REMOTE_SNIPPET = `<script type="module">
   import {
     DocumentScanner,
-    scanDocumentImage,
+    assessImageQuality,
     scanDocumentPair,
     SCANNER_VERSION,
   } from 'https://cdn.jsdelivr.net/gh/<USERNAME>/<REPO>@main/public/lib/docscan-ocr.latest.es.js';
 
-  // Optional: point Tesseract assets to your own origin for strict CSP / offline hosting
+  // Pre-flight quality check on uploaded files (or enforce directly inside scan())
+  const quality = await assessImageQuality(file);
+  if (!quality.passed) {
+    console.warn('Quality warning:', quality.guidance, quality.issues);
+  }
+
   const scanner = new DocumentScanner({
-    workerPath: '/tesseract/worker.min.js',
-    corePath: '/tesseract/tesseract-core-simd.wasm.js',
-    langPath: '/tesseract/lang-data',
-    workerBlobURL: false,
+    mrzModel: 'ocrb', // default ('standard' switches MRZ back to eng)
   });
 
-  // One-shot two-sided ID scan & merge
+  // Optionally reject blurry/glare photos automatically before OCR
   const merged = await scanDocumentPair(frontFile, backFile, {
+    enforceQualityGate: false,
     perspectiveCorrection: true,
     autoRotate: true,
-    includePreviews: false,
   });
 
   console.log(\`v\${SCANNER_VERSION}\`, merged);
 </script>`;
 
 const SOURCE_SNIPPET = `import {
+  CameraAutoCapture,
   DocumentScanner,
-  analyzeDocumentOrientation,
-  detectDocumentQuad,
+  assessImageQuality,
   mergeDocumentSides,
-  parseMrzFromText,
-  parseVizText,
 } from './scanner';
 
-// Keep one scanner instance to reuse the WebAssembly worker across scans
-const scanner = new DocumentScanner();
-const front = await scanner.scan(frontFile, { perspectiveCorrection: true, autoRotate: true });
-const back = await scanner.scan(backFile, { perspectiveCorrection: true, autoRotate: true });
+const scanner = new DocumentScanner({ mrzModel: 'ocrb' });
 
-// Merge separately scanned sides cleanly & check cross-side consistency
-const merged = mergeDocumentSides(front, back);
-
-// Or pass explicit normalized [0..1] corners to warp a tilted photo before OCR
-const customWarped = await scanner.scan(angledPhoto, {
-  corners: {
-    topLeft: { x: 0.08, y: 0.12 },
-    topRight: { x: 0.91, y: 0.09 },
-    bottomRight: { x: 0.94, y: 0.88 },
-    bottomLeft: { x: 0.06, y: 0.85 },
+// 1. Live <video> auto-capture controller
+const controller = new CameraAutoCapture(videoEl, {
+  minSharpness: 34,
+  maxGlareRatio: 0.045,
+  requiredStableFrames: 3,
+  onQualityUpdate: (report, progress) => updateHud(report, progress),
+  onAutoCapture: async (file) => {
+    const res = await scanner.scan(file);
+    console.log(res.fullName, res.quality);
   },
+});
+controller.start();
+
+// 2. Or enforce quality gate on file uploads before burning OCR cycles
+const checked = await scanner.scan(uploadedFile, {
+  enforceQualityGate: true, // throws QualityGateError if blurry, dark, or glared
 });`;
 
 const MODULES = [
   {
+    name: 'qualityGate.ts',
+    role: 'Sharpness/Laplacian focus scoring, glare hotspot & exposure checks, frame-to-frame steadiness, and CameraAutoCapture / watchCameraAutoCapture controller.',
+  },
+  {
     name: 'ocrEngine.ts',
-    role: 'Tesseract.js worker orchestration, perspective & orientation probing, scanPair(), and dual-pass MRZ merging.',
+    role: 'Dual-worker Tesseract.js orchestration (dedicated ocrb_int MRZ worker + eng VIZ worker), optional enforceQualityGate pre-check, perspective/orientation probing, and scanPair().',
   },
   {
     name: 'perspective.ts',
@@ -101,12 +108,8 @@ const MODULES = [
     role: 'Browser Canvas scaling, arbitrary-angle rotation/deskewing, contrast stretching, and flat-field MRZ isolation.',
   },
   {
-    name: 'mrzParser.ts',
-    role: 'Pure TypeScript ICAO 9303 parser for TD1 (3×30), TD2 (2×36), TD3 (2×44), MRV-A/B + Modulo-10 check digits.',
-  },
-  {
-    name: 'vizParser.ts',
-    role: 'Multilingual Visual Inspection Zone extractor for names, dates, addresses, authorities, and license details.',
+    name: 'mrzParser.ts & vizParser.ts',
+    role: 'Pure TypeScript ICAO 9303 MRZ parser (TD1/TD2/TD3/MRV) + multilingual Visual Inspection Zone extractor.',
   },
   {
     name: 'countries.ts, version.ts & types.ts',
@@ -227,7 +230,7 @@ export const IntegrationGuide: React.FC = () => {
             <div className="flex items-center gap-2">
               <Globe className="w-4 h-4 text-blue-600" />
               <h3 className="text-sm font-semibold text-slate-900">
-                01. Remote Website &lt;script&gt; Embed (UMD latest / v{SCANNER_VERSION})
+                01. Remote Website &lt;script&gt; + Camera Auto-Capture (v{SCANNER_VERSION})
               </h3>
             </div>
             <button
@@ -258,7 +261,7 @@ export const IntegrationGuide: React.FC = () => {
             <div className="flex items-center gap-2">
               <Globe className="w-4 h-4 text-blue-600" />
               <h3 className="text-sm font-semibold text-slate-900">
-                02. Remote ES Module, Pair Scan &amp; Worker Config
+                02. Remote ES Module, Quality Gate &amp; Pair Scan
               </h3>
             </div>
             <button
@@ -289,7 +292,7 @@ export const IntegrationGuide: React.FC = () => {
             <div className="flex items-center gap-2">
               <Terminal className="w-4 h-4 text-blue-600" />
               <h3 className="text-sm font-semibold text-slate-900">
-                03. Two-Sided Merging &amp; Manual Perspective Corners
+                03. CameraAutoCapture Class &amp; QualityGateError Enforcement
               </h3>
             </div>
             <button

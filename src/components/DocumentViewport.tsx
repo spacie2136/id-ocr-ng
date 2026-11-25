@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Camera,
+  CheckCircle2,
   Compass,
   Crop,
   FileImage,
@@ -10,10 +11,19 @@ import {
   ScanLine,
   ScanText,
   SlidersHorizontal,
+  Sparkles,
   Upload,
   X,
 } from 'lucide-react';
-import type { DocumentQuad, ExtractedIdentity, MergedDocumentResult, ScanProgress } from '../scanner';
+import {
+  CameraAutoCapture,
+  type DocumentQuad,
+  type ExtractedIdentity,
+  type ImageQualityReport,
+  type MergedDocumentResult,
+  type MrzOcrModel,
+  type ScanProgress,
+} from '../scanner';
 import { generateTestDocumentFile, type SpecimenKind } from '../utils/sampleDocuments';
 
 export type InputMode = 'upload' | 'camera' | 'specimen';
@@ -46,6 +56,7 @@ interface DocumentViewportProps {
   manualCorners: DocumentQuad | null;
   preprocess: boolean;
   enhanceMrzPass: boolean;
+  mrzModel: MrzOcrModel;
   onChangeScanMode: (mode: ScanMode) => void;
   onSelectFile: (file: File) => void;
   onClearFile: () => void;
@@ -57,6 +68,7 @@ interface DocumentViewportProps {
   onChangeManualCorners: (corners: DocumentQuad | null) => void;
   onTogglePreprocess: (val: boolean) => void;
   onToggleMrzPass: (val: boolean) => void;
+  onChangeMrzModel: (model: MrzOcrModel) => void;
   onTriggerScan: () => void;
 }
 
@@ -77,6 +89,7 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
   manualCorners,
   preprocess,
   enhanceMrzPass,
+  mrzModel,
   onChangeScanMode,
   onSelectFile,
   onClearFile,
@@ -88,6 +101,7 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
   onChangeManualCorners,
   onTogglePreprocess,
   onToggleMrzPass,
+  onChangeMrzModel,
   onTriggerScan,
 }) => {
   const [inputMode, setInputMode] = useState<InputMode>('upload');
@@ -96,6 +110,9 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraTargetSide, setCameraTargetSide] = useState<'single' | 'front' | 'back'>('single');
+  const [autoCaptureEnabled, setAutoCaptureEnabled] = useState(true);
+  const [liveQuality, setLiveQuality] = useState<ImageQualityReport | null>(null);
+  const [stabilityProgress, setStabilityProgress] = useState(0);
   const [generatingSpecimen, setGeneratingSpecimen] = useState<SpecimenKind | null>(null);
   const [editingCorners, setEditingCorners] = useState(false);
   const [activeDragCorner, setActiveDragCorner] = useState<CornerKey | null>(null);
@@ -105,14 +122,31 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
   const backInputRef = useRef<HTMLInputElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const autoCaptureRef = useRef<CameraAutoCapture | null>(null);
+  const autoCaptureEnabledRef = useRef(autoCaptureEnabled);
+  const cameraTargetRef = useRef(cameraTargetSide);
   const cornerOverlayRef = useRef<HTMLDivElement | null>(null);
 
+  useEffect(() => {
+    autoCaptureEnabledRef.current = autoCaptureEnabled;
+  }, [autoCaptureEnabled]);
+
+  useEffect(() => {
+    cameraTargetRef.current = cameraTargetSide;
+  }, [cameraTargetSide]);
+
   const stopCamera = () => {
+    if (autoCaptureRef.current) {
+      autoCaptureRef.current.stop();
+      autoCaptureRef.current = null;
+    }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
     }
     setCameraActive(false);
+    setLiveQuality(null);
+    setStabilityProgress(0);
   };
 
   useEffect(() => {
@@ -136,8 +170,37 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
     }
   }, [selectedFile]);
 
+  const startAutoCaptureWatcher = (videoEl: HTMLVideoElement) => {
+    if (autoCaptureRef.current) {
+      autoCaptureRef.current.stop();
+    }
+    const watcher = new CameraAutoCapture(videoEl, {
+      sampleIntervalMs: 180,
+      requiredStableFrames: 3,
+      stopOnCapture: false,
+      onQualityUpdate: (report, stabProgress) => {
+        setLiveQuality(report);
+        setStabilityProgress(autoCaptureEnabledRef.current ? stabProgress : 0);
+      },
+      onAutoCapture: (file) => {
+        if (!autoCaptureEnabledRef.current) return;
+        const target = cameraTargetRef.current;
+        stopCamera();
+        setInputMode('upload');
+        if (target === 'front' || target === 'back') {
+          onSelectPairFile(target, file);
+        } else {
+          onSelectFile(file);
+        }
+      },
+    });
+    autoCaptureRef.current = watcher;
+    watcher.start();
+  };
+
   const startCamera = async (target: 'single' | 'front' | 'back' = 'single') => {
     setCameraTargetSide(target);
+    cameraTargetRef.current = target;
     setCameraError(null);
     if (!navigator.mediaDevices?.getUserMedia) {
       setCameraError('Camera capture is not supported in this browser context.');
@@ -157,6 +220,7 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
       requestAnimationFrame(() => {
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
+          startAutoCaptureWatcher(videoRef.current);
         }
       });
     } catch (err) {
@@ -484,26 +548,104 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
                   muted
                   className="w-full h-full object-cover"
                 />
-                <div className="pointer-events-none absolute inset-6 border-2 border-dashed border-white/70 rounded-lg flex items-end justify-center pb-3">
-                  <span className="text-xs font-medium text-white bg-slate-900/75 px-3 py-1 rounded">
-                    Align passport or ID card inside frame · Keep MRZ sharp
-                  </span>
+
+                {/* Live Detected Document Quad Overlay */}
+                {liveQuality?.detectedCorners && (
+                  <svg
+                    viewBox="0 0 100 100"
+                    preserveAspectRatio="none"
+                    className="pointer-events-none absolute inset-0 w-full h-full"
+                  >
+                    <polygon
+                      points={`${liveQuality.detectedCorners.topLeft.x * 100},${liveQuality.detectedCorners.topLeft.y * 100} ${liveQuality.detectedCorners.topRight.x * 100},${liveQuality.detectedCorners.topRight.y * 100} ${liveQuality.detectedCorners.bottomRight.x * 100},${liveQuality.detectedCorners.bottomRight.y * 100} ${liveQuality.detectedCorners.bottomLeft.x * 100},${liveQuality.detectedCorners.bottomLeft.y * 100}`}
+                      fill={
+                        liveQuality.passed
+                          ? 'rgba(16, 185, 129, 0.14)'
+                          : 'rgba(245, 158, 11, 0.12)'
+                      }
+                      stroke={liveQuality.passed ? '#10b981' : '#f59e0b'}
+                      strokeWidth="0.7"
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  </svg>
+                )}
+
+                {/* Top Live Guidance Pill */}
+                <div className="pointer-events-none absolute top-3 left-3 right-3 flex items-center justify-between gap-2">
+                  <div
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-2 backdrop-blur-sm ${
+                      liveQuality?.passed
+                        ? 'bg-emerald-950/80 text-emerald-100 border border-emerald-500/50'
+                        : 'bg-slate-900/80 text-slate-100 border border-white/15'
+                    }`}
+                  >
+                    {liveQuality?.passed && (
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                    )}
+                    <span>
+                      {liveQuality?.guidance ?? 'Align passport or ID card inside frame…'}
+                    </span>
+                  </div>
+
+                  {liveQuality && (
+                    <div className="px-2.5 py-1.5 rounded-lg bg-slate-900/80 border border-white/15 text-[11px] font-mono tabular-nums text-slate-200 backdrop-blur-sm flex items-center gap-2.5 shrink-0">
+                      <span>Sharp {liveQuality.sharpnessScore}</span>
+                      <span>Glare {Math.round(liveQuality.glareRatio * 100)}%</span>
+                      <span>Lum {liveQuality.meanBrightness}</span>
+                    </div>
+                  )}
                 </div>
-                <div className="absolute bottom-4 right-4 flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={stopCamera}
-                    className="px-3 py-2 text-xs font-medium text-slate-200 bg-slate-900/80 hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap"
-                  >
-                    Stop
-                  </button>
-                  <button
-                    type="button"
-                    onClick={captureCameraFrame}
-                    className="px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors whitespace-nowrap"
-                  >
-                    Capture Photo
-                  </button>
+
+                {/* Framing Box */}
+                <div
+                  className={`pointer-events-none absolute inset-x-8 inset-y-12 border-2 border-dashed rounded-lg transition-colors ${
+                    liveQuality?.passed
+                      ? 'border-emerald-400'
+                      : liveQuality?.hasGlare || liveQuality?.exposureStatus !== 'ok'
+                        ? 'border-amber-400/80'
+                        : 'border-white/60'
+                  }`}
+                />
+
+                {/* Bottom Auto-Capture Lock Bar & Controls */}
+                <div className="absolute bottom-3 left-3 right-3 flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 bg-slate-900/80 border border-white/15 rounded-lg px-3 py-1.5 backdrop-blur-sm">
+                    <button
+                      type="button"
+                      onClick={() => setAutoCaptureEnabled((prev) => !prev)}
+                      className={`text-xs font-semibold flex items-center gap-1.5 transition-colors ${
+                        autoCaptureEnabled ? 'text-emerald-300' : 'text-slate-300'
+                      }`}
+                    >
+                      <Sparkles className="w-3.5 h-3.5" />
+                      Auto-Capture: {autoCaptureEnabled ? 'ON' : 'OFF'}
+                    </button>
+                    {autoCaptureEnabled && (
+                      <div className="w-20 h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-emerald-400 transition-all duration-150"
+                          style={{ width: `${Math.round(stabilityProgress * 100)}%` }}
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={stopCamera}
+                      className="px-3 py-2 text-xs font-medium text-slate-200 bg-slate-900/80 hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap"
+                    >
+                      Stop
+                    </button>
+                    <button
+                      type="button"
+                      onClick={captureCameraFrame}
+                      className="px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors whitespace-nowrap"
+                    >
+                      Capture Photo
+                    </button>
+                  </div>
                 </div>
               </div>
             ) : (
@@ -511,10 +653,10 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
                 <Camera className="w-8 h-8 text-slate-400" />
                 <div className="max-w-sm">
                   <p className="text-sm font-medium text-white">
-                    Capture Passport or ID Card via Webcam
+                    Live Camera Auto-Capture &amp; Quality Gate
                   </p>
                   <p className="text-xs text-slate-400 mt-1">
-                    Works best under even lighting without glare over the MRZ lines.
+                    Automatically measures focus sharpness, glare hotspots, lighting, and hold steadiness before firing the shutter.
                   </p>
                 </div>
                 {cameraError && (
@@ -949,6 +1091,23 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
                 Dedicated MRZ Strip Pass
               </span>
             </label>
+
+            <div className="inline-flex items-center gap-1.5">
+              <label htmlFor="mrz-model-select" className="text-slate-500">
+                MRZ Model:
+              </label>
+              <select
+                id="mrz-model-select"
+                value={mrzModel}
+                onChange={(e) => onChangeMrzModel(e.target.value as MrzOcrModel)}
+                disabled={isScanning || !enhanceMrzPass}
+                title="Dedicated OCR-B model is default for highest MRZ accuracy; switch to Standard (eng) to revert"
+                className="text-xs font-medium text-slate-800 bg-white border border-slate-300 rounded-md px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-slate-100 disabled:text-slate-400"
+              >
+                <option value="ocrb">OCR-B (Default)</option>
+                <option value="standard">Standard (eng)</option>
+              </select>
+            </div>
           </div>
 
           <button
