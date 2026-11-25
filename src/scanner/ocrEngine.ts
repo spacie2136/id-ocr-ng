@@ -31,9 +31,11 @@ import type {
   ScanProgress,
   ScannerOptions,
   TesseractWorkerConfig,
+  VizLanguageMode,
   VizLineBox,
   VizParsedData,
 } from './types';
+import { resolveNativeVizLanguage, resolveVizPassStrategy } from './vizLanguages';
 import { parseVizText } from './vizParser';
 
 const DEFAULT_MRZ_OCRB_LANG = 'ocrb_int';
@@ -83,6 +85,34 @@ function inferDocumentType(
   return vizHint ?? 'unknown';
 }
 
+function stripDiacritics(str: string): string {
+  return str
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function toMrzTransliteration(str: string): string {
+  const expanded = str
+    .replace(/[Ää]/g, 'AE')
+    .replace(/[Öö]/g, 'OE')
+    .replace(/[Üü]/g, 'UE')
+    .replace(/ß/g, 'SS')
+    .replace(/[Øø]/g, 'OE')
+    .replace(/[Ææ]/g, 'AE')
+    .replace(/[Åå]/g, 'AA')
+    .replace(/[Łł]/g, 'L')
+    .replace(/[Đđ]/g, 'D');
+  return stripDiacritics(expanded);
+}
+
+function hasDiacritics(str: string): boolean {
+  return /[^\u0000-\u007F]/.test(str);
+}
+
 function pickField<T>(
   mrzVal: T | null | undefined,
   vizVal: T | null | undefined,
@@ -105,6 +135,129 @@ function pickField<T>(
     return vizVal as T;
   }
   return null;
+}
+
+function pickSingleSideName(
+  mrzVal: string | null | undefined,
+  vizVal: string | null | undefined,
+  fieldKey: string,
+  sources: Record<string, FieldSource>
+): string | null {
+  const m = mrzVal?.trim() || null;
+  const v = vizVal?.trim() || null;
+
+  if (m && v) {
+    sources[fieldKey] = 'MRZ+VIZ';
+    const mAscii = stripDiacritics(m);
+    const vAscii = stripDiacritics(v);
+    const vTranslit = toMrzTransliteration(v);
+    if (hasDiacritics(v) && (vAscii === mAscii || vTranslit === mAscii)) {
+      return v;
+    }
+    if (
+      vAscii.length > mAscii.length &&
+      mAscii.length >= 8 &&
+      vAscii.startsWith(mAscii.slice(0, 8))
+    ) {
+      return v;
+    }
+    return m;
+  }
+
+  if (m) {
+    sources[fieldKey] = 'MRZ';
+    return m;
+  }
+  if (v) {
+    sources[fieldKey] = 'VIZ';
+    return v;
+  }
+  return null;
+}
+
+function pickMergedVizString(
+  primaryVal: string | null,
+  nativeVal: string | null,
+  primaryConf: number,
+  nativeConf: number
+): string | null {
+  const p = primaryVal?.trim() || null;
+  const n = nativeVal?.trim() || null;
+  if (!p) return n;
+  if (!n) return p;
+
+  const pAscii = stripDiacritics(p);
+  const nAscii = stripDiacritics(n);
+  if (pAscii === nAscii) {
+    if (hasDiacritics(n) && !hasDiacritics(p)) return n;
+    if (hasDiacritics(p) && !hasDiacritics(n)) return p;
+  }
+  if (hasDiacritics(n) && !hasDiacritics(p) && nativeConf >= primaryConf - 5) {
+    return n;
+  }
+  if (nativeConf >= primaryConf + 4 && n.length >= Math.max(2, p.length - 1)) {
+    return n;
+  }
+  if (nativeConf >= primaryConf - 2 && n.length > p.length + 2) {
+    return n;
+  }
+  return nativeConf > primaryConf ? n : p;
+}
+
+function mergeVizData(
+  primary: VizParsedData,
+  primaryConf: number,
+  nativeViz: VizParsedData,
+  nativeConf: number
+): VizParsedData {
+  const surname = pickMergedVizString(primary.surname, nativeViz.surname, primaryConf, nativeConf);
+  const surnames =
+    surname === nativeViz.surname && nativeViz.surnames.length > 0
+      ? nativeViz.surnames
+      : primary.surnames.length > 0
+        ? primary.surnames
+        : surname
+          ? surname.split(/\s+/).filter(Boolean)
+          : [];
+
+  return {
+    documentTypeHint: primary.documentTypeHint ?? nativeViz.documentTypeHint,
+    surname,
+    surnames,
+    givenNames: pickMergedVizString(primary.givenNames, nativeViz.givenNames, primaryConf, nativeConf),
+    fullName: pickMergedVizString(primary.fullName, nativeViz.fullName, primaryConf, nativeConf),
+    documentNumber: primary.documentNumber ?? nativeViz.documentNumber,
+    personalNumber: primary.personalNumber ?? nativeViz.personalNumber,
+    nationality: pickMergedVizString(primary.nationality, nativeViz.nationality, primaryConf, nativeConf),
+    issuingCountry: pickMergedVizString(primary.issuingCountry, nativeViz.issuingCountry, primaryConf, nativeConf),
+    dateOfBirth: primary.dateOfBirth ?? nativeViz.dateOfBirth,
+    dateOfIssue: primary.dateOfIssue ?? nativeViz.dateOfIssue,
+    dateOfExpiry: primary.dateOfExpiry ?? nativeViz.dateOfExpiry,
+    sex: primary.sex ?? nativeViz.sex,
+    placeOfBirth: pickMergedVizString(primary.placeOfBirth, nativeViz.placeOfBirth, primaryConf, nativeConf),
+    address: pickMergedVizString(primary.address, nativeViz.address, primaryConf, nativeConf),
+    parents: pickMergedVizString(primary.parents, nativeViz.parents, primaryConf, nativeConf),
+    issuingAuthority: pickMergedVizString(
+      primary.issuingAuthority,
+      nativeViz.issuingAuthority,
+      primaryConf,
+      nativeConf
+    ),
+    licenseClass: primary.licenseClass ?? nativeViz.licenseClass,
+    restrictions: pickMergedVizString(primary.restrictions, nativeViz.restrictions, primaryConf, nativeConf),
+    endorsements: pickMergedVizString(primary.endorsements, nativeViz.endorsements, primaryConf, nativeConf),
+    height: primary.height ?? nativeViz.height,
+    eyeColor: pickMergedVizString(primary.eyeColor, nativeViz.eyeColor, primaryConf, nativeConf),
+    hairColor: pickMergedVizString(primary.hairColor, nativeViz.hairColor, primaryConf, nativeConf),
+    detectedLines:
+      nativeConf >= primaryConf && nativeViz.detectedLines.length > 0
+        ? nativeViz.detectedLines
+        : primary.detectedLines,
+    unmappedKeyValues: {
+      ...primary.unmappedKeyValues,
+      ...nativeViz.unmappedKeyValues,
+    },
+  };
 }
 
 function normalizeConfusableChars(val: string): string {
@@ -161,7 +314,8 @@ function extractVizLineBoxes(blocks: Block[] | null): VizLineBox[] {
               const currCharW = (w.bbox.x1 - w.bbox.x0) / Math.max(1, wText.length);
               const avgCharW = (prevCharW + currCharW) / 2;
               const bothAlphaUpper =
-                /^[A-ZÄÖÜÑ]{2,}$/.test(prevText) && /^[A-ZÄÖÜÑ]{2,}$/.test(wText);
+                /^[A-Z\u00C0-\u024F]{2,}$/.test(prevText) &&
+                /^[A-Z\u00C0-\u024F]{2,}$/.test(wText);
               if (bothAlphaUpper && gap < avgCharW * 1.02) {
                 text += wText;
               } else {
@@ -663,7 +817,7 @@ function scoreOrientationPass(
   score += vizFields * 28;
   if (viz.documentTypeHint) score += 25;
   score += confidence * 0.8;
-  const readableWords = (rawText.match(/[A-Za-z]{3,}/g) || []).length;
+  const readableWords = (rawText.match(/[A-Za-z\u00C0-\u024F]{3,}/g) || []).length;
   score += Math.min(readableWords, 30) * 1.5;
   return score;
 }
@@ -694,6 +848,11 @@ export class DocumentScanner {
   private workerLang: string | null = null;
   private workerConfigKey: string | null = null;
 
+  private vizNativeWorker: Worker | null = null;
+  private vizNativeLang: string | null = null;
+  private vizNativeConfigKey: string | null = null;
+  private vizNativeFailedLangs = new Set<string>();
+
   private mrzWorker: Worker | null = null;
   private mrzWorkerConfigKey: string | null = null;
   private mrzOcrbFailed = false;
@@ -716,17 +875,31 @@ export class DocumentScanner {
       mrzLanguage: override.mrzLanguage ?? this.defaultWorkerConfig.mrzLanguage,
       mrzLangPath: override.mrzLangPath ?? this.defaultWorkerConfig.mrzLangPath,
       mrzGzip: override.mrzGzip ?? this.defaultWorkerConfig.mrzGzip,
+      vizLanguageMode: override.vizLanguageMode ?? this.defaultWorkerConfig.vizLanguageMode,
+      vizLanguages: override.vizLanguages ?? this.defaultWorkerConfig.vizLanguages,
+      vizLanguageMap: override.vizLanguageMap ?? this.defaultWorkerConfig.vizLanguageMap,
     };
   }
 
-  private createLoggerOption(stageFilter: 'full' | 'mrz') {
+  private createLoggerOption(stageFilter: 'full' | 'native' | 'mrz') {
     return (info: { status: string; progress?: number }) => {
       if (!this.activeStageCallback) return;
       if (info.status === 'recognizing text') {
         if (stageFilter === 'full' && this.activeStage !== 'recognizing_full') return;
+        if (stageFilter === 'native' && this.activeStage !== 'recognizing_viz_native') return;
         if (stageFilter === 'mrz' && this.activeStage !== 'recognizing_mrz') return;
-        const base = this.activeStage === 'recognizing_full' ? 25 : 65;
-        const span = this.activeStage === 'recognizing_full' ? 35 : 25;
+        const base =
+          this.activeStage === 'recognizing_full'
+            ? 25
+            : this.activeStage === 'recognizing_viz_native'
+              ? 82
+              : 65;
+        const span =
+          this.activeStage === 'recognizing_full'
+            ? 35
+            : this.activeStage === 'recognizing_viz_native'
+              ? 10
+              : 25;
         const pct = Math.round(base + (info.progress || 0) * span);
         this.activeStageCallback({
           stage: this.activeStage,
@@ -734,7 +907,9 @@ export class DocumentScanner {
           message:
             this.activeStage === 'recognizing_full'
               ? 'Reading document text & visual inspection zone…'
-              : 'Running dedicated OCR-B MRZ strip verification…',
+              : this.activeStage === 'recognizing_viz_native'
+                ? 'Refining native-script diacritics & labels…'
+                : 'Running dedicated OCR-B MRZ strip verification…',
         });
       }
     };
@@ -800,6 +975,76 @@ export class DocumentScanner {
     this.workerLang = language;
     this.workerConfigKey = configKey;
     return worker;
+  }
+
+  private async ensureNativeVizWorker(
+    nativeLanguage: string,
+    workerConfig: TesseractWorkerConfig,
+    onProgress?: (p: ScanProgress) => void
+  ): Promise<Worker | null> {
+    this.activeStageCallback = onProgress ?? null;
+    const mergedConfig = this.mergeWorkerConfig(workerConfig);
+    const configKey = JSON.stringify({
+      workerPath: mergedConfig.workerPath,
+      corePath: mergedConfig.corePath,
+      langPath: mergedConfig.langPath,
+      workerBlobURL: mergedConfig.workerBlobURL,
+    });
+
+    if (this.vizNativeFailedLangs.has(`${nativeLanguage}:${configKey}`)) {
+      return null;
+    }
+
+    if (
+      this.vizNativeWorker &&
+      this.vizNativeLang === nativeLanguage &&
+      this.vizNativeConfigKey === configKey
+    ) {
+      return this.vizNativeWorker;
+    }
+
+    if (this.vizNativeWorker) {
+      await this.vizNativeWorker.terminate();
+      this.vizNativeWorker = null;
+      this.vizNativeLang = null;
+    }
+
+    try {
+      this.activeStage = 'recognizing_viz_native';
+      onProgress?.({
+        stage: 'recognizing_viz_native',
+        progress: 82,
+        message: `Loading native VIZ language pack (${nativeLanguage})…`,
+      });
+
+      const nativeOptions: Record<string, unknown> = {
+        logger: this.createLoggerOption('native'),
+      };
+      if (mergedConfig.workerPath) nativeOptions.workerPath = mergedConfig.workerPath;
+      if (mergedConfig.corePath) nativeOptions.corePath = mergedConfig.corePath;
+      if (mergedConfig.langPath) nativeOptions.langPath = mergedConfig.langPath;
+      if (mergedConfig.workerBlobURL !== undefined) {
+        nativeOptions.workerBlobURL = mergedConfig.workerBlobURL;
+      }
+
+      const worker = await createWorker(
+        nativeLanguage,
+        1,
+        nativeOptions,
+        {
+          load_system_dawg: '0',
+          load_freq_dawg: '0',
+        }
+      );
+
+      this.vizNativeWorker = worker;
+      this.vizNativeLang = nativeLanguage;
+      this.vizNativeConfigKey = configKey;
+      return worker;
+    } catch {
+      this.vizNativeFailedLangs.add(`${nativeLanguage}:${configKey}`);
+      return null;
+    }
   }
 
   private async ensureMrzWorker(
@@ -1094,10 +1339,13 @@ export class DocumentScanner {
       mrzLanguage,
       mrzLangPath,
       mrzGzip,
+      vizLanguageMode,
+      vizLanguages,
+      vizLanguageMap,
       onProgress,
     } = options;
 
-    const workerConfig: TesseractWorkerConfig = {
+    const workerConfig = this.mergeWorkerConfig({
       workerPath,
       corePath,
       langPath,
@@ -1106,7 +1354,16 @@ export class DocumentScanner {
       mrzLanguage,
       mrzLangPath,
       mrzGzip,
-    };
+      vizLanguageMode,
+      vizLanguages,
+      vizLanguageMap,
+    });
+
+    const vizStrategy = resolveVizPassStrategy({
+      language,
+      vizLanguageMode: workerConfig.vizLanguageMode,
+      vizLanguages: workerConfig.vizLanguages,
+    });
 
     const autoRotate =
       options.autoRotate !== undefined
@@ -1193,7 +1450,7 @@ export class DocumentScanner {
       }
     }
 
-    const worker = await this.ensureWorker(language, workerConfig, onProgress);
+    const worker = await this.ensureWorker(vizStrategy.primaryLanguage, workerConfig, onProgress);
 
     let deskewDegrees = manualDeskew;
     let candidateOrder: Array<0 | 90 | 180 | 270> = [rotation];
@@ -1230,7 +1487,7 @@ export class DocumentScanner {
         const rot = candidateOrder[idx];
         onProgress?.({
           stage: 'detecting_orientation',
-          progress: 82 + idx * 3,
+          progress: 75 + idx * 2,
           message: `Checking ${rot}° orientation alignment…`,
         });
 
@@ -1266,13 +1523,87 @@ export class DocumentScanner {
       }
     }
 
+    const { preprocessed, mrzData, mrzRawText, mrzModelUsed } = bestPass;
+    let cleanedFullText = bestPass.cleanedFullText;
+    let vizData = bestPass.vizData;
+    let confidence = bestPass.confidence;
+    let activeVizLanguage = vizStrategy.primaryLanguage;
+    const effectiveVizMode: VizLanguageMode = vizStrategy.effectiveMode;
+
+    if (vizStrategy.allowAutoFollowUp) {
+      const targetNativeLang = resolveNativeVizLanguage({
+        issuingCountry: mrzData?.issuingCountry ?? vizData.issuingCountry,
+        nationality: mrzData?.nationality ?? vizData.nationality,
+        rawText: cleanedFullText,
+        customMap: workerConfig.vizLanguageMap,
+        baseLanguage: vizStrategy.primaryLanguage,
+      });
+
+      if (targetNativeLang) {
+        const nativeWorker = await this.ensureNativeVizWorker(
+          targetNativeLang,
+          workerConfig,
+          onProgress
+        );
+
+        if (nativeWorker) {
+          try {
+            this.activeStage = 'recognizing_viz_native';
+            onProgress?.({
+              stage: 'recognizing_viz_native',
+              progress: 85,
+              message: `Running native-script VIZ pass (${targetNativeLang})…`,
+            });
+
+            await nativeWorker.setParameters({
+              tessedit_pageseg_mode: PSM.SPARSE_TEXT,
+              tessedit_char_whitelist: '',
+            });
+
+            const fullInputUrl = preprocess
+              ? preprocessed.enhancedDataUrl
+              : preprocessed.originalDataUrl;
+            let nativeResult = await nativeWorker.recognize(fullInputUrl, {}, { blocks: true });
+            let nativeText = nativeResult.data.text || '';
+            let nativeConfidence = nativeResult.data.confidence || 0;
+
+            if (nativeText.trim().split(/\r?\n/).filter(Boolean).length < 2) {
+              await nativeWorker.setParameters({
+                tessedit_pageseg_mode: PSM.AUTO,
+                tessedit_char_whitelist: '',
+              });
+              const autoNative = await nativeWorker.recognize(fullInputUrl, {}, { blocks: true });
+              if ((autoNative.data.text || '').trim().length > nativeText.trim().length) {
+                nativeResult = autoNative;
+                nativeText = autoNative.data.text || '';
+                nativeConfidence = autoNative.data.confidence || 0;
+              }
+            }
+
+            const nativeBoxes = extractVizLineBoxes(nativeResult.data.blocks);
+            const cleanedNativeText =
+              nativeBoxes.length > 0 ? nativeBoxes.map((b) => b.text).join('\n') : nativeText;
+            const nativeVizData = parseVizText(cleanedNativeText, nativeBoxes);
+
+            vizData = mergeVizData(vizData, confidence, nativeVizData, nativeConfidence);
+            if (nativeConfidence >= confidence - 2 || countPopulatedVizFields(nativeVizData) >= countPopulatedVizFields(bestPass.vizData)) {
+              cleanedFullText = cleanedNativeText || cleanedFullText;
+            }
+            confidence = Math.max(confidence, nativeConfidence);
+            activeVizLanguage = targetNativeLang;
+          } catch {
+            // Silently preserve primary VIZ pass if native follow-up fails mid-recognition
+          }
+        }
+      }
+    }
+
     onProgress?.({
       stage: 'parsing',
-      progress: 92,
+      progress: 94,
       message: 'Extracting personal fields & verifying ICAO 9303 check digits…',
     });
 
-    const { preprocessed, cleanedFullText, vizData, mrzData, mrzRawText, mrzModelUsed, confidence } = bestPass;
     const fieldSources: Record<string, FieldSource> = {};
 
     const issuingCountry = pickField(
@@ -1288,34 +1619,48 @@ export class DocumentScanner {
       fieldSources
     );
 
-    const surname = pickField(mrzData?.surname, vizData.surname, 'surname', fieldSources);
+    const surname = pickSingleSideName(
+      mrzData?.surname,
+      vizData.surname,
+      'surname',
+      fieldSources
+    );
     const surnames =
-      mrzData?.surnames && mrzData.surnames.length > 0
-        ? mrzData.surnames
-        : vizData.surnames.length > 0
-          ? vizData.surnames
-          : surname
-            ? surname.split(/\s+/).filter(Boolean)
-            : [];
+      surname && mrzData?.surname && surname !== mrzData.surname
+        ? surname.split(/\s+/).filter(Boolean)
+        : mrzData?.surnames && mrzData.surnames.length > 0
+          ? mrzData.surnames
+          : vizData.surnames.length > 0
+            ? vizData.surnames
+            : surname
+              ? surname.split(/\s+/).filter(Boolean)
+              : [];
 
-    const givenNames = pickField(
+    const givenNames = pickSingleSideName(
       mrzData?.givenNames,
       vizData.givenNames,
       'givenNames',
       fieldSources
     );
     const givenNamesList =
-      mrzData?.givenNamesList && mrzData.givenNamesList.length > 0
-        ? mrzData.givenNamesList
-        : givenNames
-          ? givenNames.split(/\s+/).filter(Boolean)
-          : [];
+      givenNames && mrzData?.givenNames && givenNames !== mrzData.givenNames
+        ? givenNames.split(/\s+/).filter(Boolean)
+        : mrzData?.givenNamesList && mrzData.givenNamesList.length > 0
+          ? mrzData.givenNamesList
+          : givenNames
+            ? givenNames.split(/\s+/).filter(Boolean)
+            : [];
 
-    const mrzFullName =
-      mrzData && (mrzData.givenNames || mrzData.surname)
-        ? [mrzData.givenNames, mrzData.surname].filter(Boolean).join(' ')
-        : null;
-    const fullName = pickField(mrzFullName, vizData.fullName, 'fullName', fieldSources);
+    const fullName =
+      givenNames || surname
+        ? [givenNames, surname].filter(Boolean).join(' ')
+        : pickField(null, vizData.fullName, 'fullName', fieldSources);
+    if (fullName && !fieldSources.fullName) {
+      fieldSources.fullName =
+        fieldSources.givenNames === 'MRZ+VIZ' || fieldSources.surname === 'MRZ+VIZ'
+          ? 'MRZ+VIZ'
+          : fieldSources.givenNames ?? fieldSources.surname ?? 'VIZ';
+    }
 
     const documentNumber = reconcileDocumentNumber(
       mrzData,
@@ -1433,6 +1778,8 @@ export class DocumentScanner {
       hairColor,
       mrz: mrzData,
       mrzModel: mrzModelUsed,
+      vizLanguageMode: effectiveVizMode,
+      vizLanguage: activeVizLanguage,
       unmappedFields: vizData.unmappedKeyValues,
       fieldSources,
       rawOcrText: cleanedFullText.trim(),
@@ -1504,6 +1851,13 @@ export class DocumentScanner {
       this.workerLang = null;
       this.workerConfigKey = null;
     }
+    if (this.vizNativeWorker) {
+      await this.vizNativeWorker.terminate();
+      this.vizNativeWorker = null;
+      this.vizNativeLang = null;
+      this.vizNativeConfigKey = null;
+    }
+    this.vizNativeFailedLangs.clear();
     if (this.mrzWorker) {
       await this.mrzWorker.terminate();
       this.mrzWorker = null;
@@ -1526,6 +1880,9 @@ export async function scanDocumentImage(
     mrzLanguage: options.mrzLanguage,
     mrzLangPath: options.mrzLangPath,
     mrzGzip: options.mrzGzip,
+    vizLanguageMode: options.vizLanguageMode,
+    vizLanguages: options.vizLanguages,
+    vizLanguageMap: options.vizLanguageMap,
   });
   try {
     return await scanner.scan(input, options);
@@ -1548,6 +1905,9 @@ export async function scanDocumentPair(
     mrzLanguage: options.mrzLanguage,
     mrzLangPath: options.mrzLangPath,
     mrzGzip: options.mrzGzip,
+    vizLanguageMode: options.vizLanguageMode,
+    vizLanguages: options.vizLanguages,
+    vizLanguageMap: options.vizLanguageMap,
   });
   try {
     return await scanner.scanPair(front, back, options);

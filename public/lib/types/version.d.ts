@@ -1,1 +1,1 @@
-export declare const SCANNER_VERSION = "0.0.3";
+export declare const SCANNER_VERSION = "0.0.4";

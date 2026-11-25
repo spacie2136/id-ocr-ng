@@ -23,6 +23,7 @@ import {
   type MergedDocumentResult,
   type MrzOcrModel,
   type ScanProgress,
+  type VizLanguageMode,
 } from '../scanner';
 import { generateTestDocumentFile, type SpecimenKind } from '../utils/sampleDocuments';
 
@@ -57,6 +58,9 @@ interface DocumentViewportProps {
   preprocess: boolean;
   enhanceMrzPass: boolean;
   mrzModel: MrzOcrModel;
+  vizLanguageMode: VizLanguageMode;
+  useCustomVizLanguages: boolean;
+  customVizLanguages: string;
   onChangeScanMode: (mode: ScanMode) => void;
   onSelectFile: (file: File) => void;
   onClearFile: () => void;
@@ -69,6 +73,9 @@ interface DocumentViewportProps {
   onTogglePreprocess: (val: boolean) => void;
   onToggleMrzPass: (val: boolean) => void;
   onChangeMrzModel: (model: MrzOcrModel) => void;
+  onChangeVizLanguageMode: (mode: VizLanguageMode) => void;
+  onToggleCustomVizLanguages: (enabled: boolean) => void;
+  onChangeCustomVizLanguages: (lang: string) => void;
   onTriggerScan: () => void;
 }
 
@@ -90,6 +97,9 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
   preprocess,
   enhanceMrzPass,
   mrzModel,
+  vizLanguageMode,
+  useCustomVizLanguages,
+  customVizLanguages,
   onChangeScanMode,
   onSelectFile,
   onClearFile,
@@ -102,6 +112,9 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
   onTogglePreprocess,
   onToggleMrzPass,
   onChangeMrzModel,
+  onChangeVizLanguageMode,
+  onToggleCustomVizLanguages,
+  onChangeCustomVizLanguages,
   onTriggerScan,
 }) => {
   const [inputMode, setInputMode] = useState<InputMode>('upload');
@@ -335,6 +348,7 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
   const activeQuad = manualCorners ?? DEFAULT_QUAD;
   const canRunScan =
     scanMode === 'pair' ? Boolean(frontFile && backFile) : Boolean(selectedFile);
+  const vizSelectValue = useCustomVizLanguages ? 'custom' : vizLanguageMode;
 
   const renderPairSideSlot = (
     side: 'front' | 'back',
@@ -1107,6 +1121,43 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
                 <option value="ocrb">OCR-B (Default)</option>
                 <option value="standard">Standard (eng)</option>
               </select>
+            </div>
+
+            <div className="inline-flex items-center gap-1.5">
+              <label htmlFor="viz-lang-select" className="text-slate-500">
+                VIZ Language:
+              </label>
+              <select
+                id="viz-lang-select"
+                value={vizSelectValue}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val === 'custom') {
+                    onToggleCustomVizLanguages(true);
+                  } else {
+                    onChangeVizLanguageMode(val as VizLanguageMode);
+                  }
+                }}
+                disabled={isScanning}
+                title="Auto Native routes non-English documents to native Tesseract packs (e.g. eng+deu, eng+spa) for accurate diacritics"
+                className="text-xs font-medium text-slate-800 bg-white border border-slate-300 rounded-md px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-slate-100 disabled:text-slate-400"
+              >
+                <option value="auto">Auto Native (Default)</option>
+                <option value="multilingual">Multi-Script (EN+DE+ES+FR)</option>
+                <option value="standard">Standard (eng)</option>
+                <option value="custom">Custom Override…</option>
+              </select>
+              {useCustomVizLanguages && (
+                <input
+                  type="text"
+                  aria-label="Custom Tesseract VIZ language string"
+                  value={customVizLanguages}
+                  onChange={(e) => onChangeCustomVizLanguages(e.target.value)}
+                  disabled={isScanning}
+                  placeholder="eng+deu"
+                  className="w-28 text-xs font-mono text-slate-800 bg-white border border-slate-300 rounded-md px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-slate-100"
+                />
+              )}
             </div>
           </div>
 

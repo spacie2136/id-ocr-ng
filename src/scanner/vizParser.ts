@@ -2,34 +2,71 @@ import type { DocumentType, VizLineBox, VizParsedData } from './types';
 
 const MONTHS: Record<string, string> = {
   JAN: '01',
-  FEB: '02',
-  MAR: '03',
-  APR: '04',
-  MAY: '05',
-  JUN: '06',
-  JUL: '07',
-  AUG: '08',
-  SEP: '09',
-  SEPT: '09',
-  OCT: '10',
-  NOV: '11',
-  DEC: '12',
   JANV: '01',
+  ENE: '01',
+  STY: '01',
+  LED: '01',
+  SAU: '01',
+  FEB: '02',
   FEV: '02',
   FEVR: '02',
-  AVR: '04',
-  MAI: '05',
-  JUIN: '06',
-  JUIL: '07',
-  AOUT: '08',
-  DECEMB: '12',
+  LUT: '02',
+  UNO: '02',
+  VAS: '02',
+  MAR: '03',
   MRZ: '03',
-  OKT: '10',
-  DEZ: '12',
-  ENE: '01',
+  BRE: '03',
+  BŘE: '03',
+  KOV: '03',
+  APR: '04',
+  AVR: '04',
   ABR: '04',
+  KWI: '04',
+  DUB: '04',
+  BAL: '04',
+  MAY: '05',
+  MAI: '05',
+  KVE: '05',
+  KVĚ: '05',
+  GEG: '05',
+  JUN: '06',
+  JUIN: '06',
+  CRV: '06',
+  ČRV: '06',
+  BIR: '06',
+  JUL: '07',
+  JUIL: '07',
+  LIP: '07',
+  ČVC: '07',
+  AUG: '08',
+  AOUT: '08',
   AGO: '08',
+  SIE: '08',
+  SRP: '08',
+  RGP: '08',
+  SEP: '09',
+  SEPT: '09',
+  SET: '09',
+  WRZ: '09',
+  ZAR: '09',
+  ZÁŘ: '09',
+  RGS: '09',
+  OCT: '10',
+  OKT: '10',
+  OUT: '10',
+  PAZ: '10',
+  PAŹ: '10',
+  RIJ: '10',
+  ŘÍJ: '10',
+  NOV: '11',
+  LIS: '11',
+  LAP: '11',
+  DEC: '12',
+  DECEMB: '12',
+  DEZ: '12',
   DIC: '12',
+  PRO: '12',
+  GRU: '12',
 };
 
 export function normalizeVisualDate(raw: string): string | null {
@@ -47,7 +84,9 @@ export function normalizeVisualDate(raw: string): string | null {
     }
   }
 
-  m = cleaned.match(/\b(\d{1,2})\s+([A-Z]{3,5})(?:\/[A-Z]{2,5})?\s+((?:19|20)\d{2})\b/);
+  m = cleaned.match(
+    /\b(\d{1,2})\s+([A-Z\u00C0-\u024F]{3,6})(?:\/[A-Z\u00C0-\u024F]{2,6})?\s+((?:19|20)\d{2})\b/
+  );
   if (m) {
     const [, d, mon, y] = m;
     const monthNum = MONTHS[mon];
@@ -56,7 +95,7 @@ export function normalizeVisualDate(raw: string): string | null {
     }
   }
 
-  m = cleaned.match(/\b([A-Z]{3,5})\s+(\d{1,2}),?\s+((?:19|20)\d{2})\b/);
+  m = cleaned.match(/\b([A-Z\u00C0-\u024F]{3,6})\s+(\d{1,2}),?\s+((?:19|20)\d{2})\b/);
   if (m) {
     const [, mon, d, y] = m;
     const monthNum = MONTHS[mon];
@@ -100,8 +139,8 @@ function extractAllDatesFromText(text: string): string[] {
   const results: string[] = [];
   const patterns = [
     /\b(?:19|20)\d{2}[-./]\d{1,2}[-./]\d{1,2}\b/g,
-    /\b\d{1,2}\s+[A-Za-z]{3,5}(?:\/[A-Za-z]{2,5})?\s+(?:19|20)\d{2}\b/g,
-    /\b[A-Za-z]{3,5}\s+\d{1,2},?\s+(?:19|20)\d{2}\b/g,
+    /\b\d{1,2}\s+[A-Za-z\u00C0-\u024F]{3,6}(?:\/[A-Za-z\u00C0-\u024F]{2,6})?\s+(?:19|20)\d{2}\b/g,
+    /\b[A-Za-z\u00C0-\u024F]{3,6}\s+\d{1,2},?\s+(?:19|20)\d{2}\b/g,
     /\b\d{1,2}(?:[-./]|\s+)\d{1,2}(?:[-./]|\s+)(?:19|20)\d{2}\b/g,
   ];
   for (const p of patterns) {
@@ -151,14 +190,14 @@ const LABEL_RULES: LabelRule[] = [
     field: 'surname',
     patterns: [
       /\b(?:primer\s*apellido|segundo\s*apellido|1er\.?\s*apellido|2[oº]\.?\s*apellido)\b/i,
-      /\b(?:surname|sumarre|sumame|last\s*name|family\s*name|nom(?:\s*de\s*famille)?|familienname|nachname|apell?i?dos?|cognome|nazwisko|achternaam)\b/i,
+      /\b(?:surname|sumarre|sumame|last\s*name|family\s*name|nom(?:\s*de\s*famille)?|familienname|nachname|apell?i?dos?|cognome|nazwisko|achternaam|geslachtsnaam|pavard[eė]|p[rř][ií]jmen[ií]|vezet[eé]kn[eé]v|efternamn|etternavn)\b/i,
       /^(?:1[.)]?\s*)?(?:surname|nom|name)\b/i,
     ],
   },
   {
     field: 'givenNames',
     patterns: [
-      /\b(?:given\s*names?|first\s*names?|forenames?|pr[eé]noms?|vornamen?|vorname|nombres?|nome|imiona|voornamen)\b/i,
+      /\b(?:given\s*names?|first\s*names?|forenames?|pr[eé]noms?|vornamen?|vorname|nombres?|nome(?:\s*pr[oó]prio)?|imiona|voornamen|vardai|jm[eé]n[ao]?|ut[oó]n[eé]v|f[oö]rnamn|fornavn)\b/i,
       /^(?:2[.)]?\s*)?(?:given\s*names?|first\s*name)\b/i,
     ],
   },
@@ -171,39 +210,39 @@ const LABEL_RULES: LabelRule[] = [
   {
     field: 'documentNumber',
     patterns: [
-      /\b(?:passport\s*no\.?|pasaporte\s*n[°o]?|passeport\s*n[°o]?|pass-?nr\.?|document\s*(?:no\.?|number|id)|card\s*no\.?|id\s*number|dl\s*no\.?|licen[cs]e\s*(?:no\.?|number)|no\.?\s*du\s*passeport|reisepass\s*nr|numero\s*(?:del\s*)?documento)\b/i,
+      /\b(?:passport\s*no\.?|pasaporte\s*n[°o]?|passeport\s*n[°o]?|pass-?nr\.?|document\s*(?:no\.?|number|id)|card\s*no\.?|id\s*number|dl\s*no\.?|licen[cs]e\s*(?:no\.?|number)|no\.?\s*du\s*passeport|reisepass\s*nr|n[uú]mero\s*(?:del\s*)?documento|paso\s*nr|č[ií]slo\s*pasu)\b/i,
       /^(?:4d|5)[.)]\s*/i,
     ],
   },
   {
     field: 'personalNumber',
     patterns: [
-      /\b(?:personal\s*(?:no\.?|number|id)|national\s*(?:id|no\.?|number)|identity\s*no\.?|id\.?\s*no\.?|pesel|ssn|social\s*security|tax\s*id|cnp|dni|nif|nie|bsn|fiscal\s*code|codice\s*fiscale)\b/i,
+      /\b(?:personal\s*(?:no\.?|number|id)|national\s*(?:id|no\.?|number)|identity\s*no\.?|id\.?\s*no\.?|pesel|ssn|social\s*security|tax\s*id|cnp|dni|nif|nie|bsn|fiscal\s*code|codice\s*fiscale|asmens\s*kodas|rodn[eé]\s*[cč][ií]slo|osobn[ií]\s*[cč][ií]slo)\b/i,
     ],
   },
   {
     field: 'nationality',
     patterns: [
-      /\b(?:nationalit[yé]|naticnalt[yé]|staatsangeh[oö]rigkeit|nacionalidad|nazionalit[aà]|obywatelstwo|citizenship)\b/i,
+      /\b(?:nationalit[yé]|naticnalt[yé]|staatsangeh[oö]rigkeit|nacionalidad|nacionalidade|nazionalit[aà]|obywatelstwo|citizenship|pilietyb[eė]|st[aá]tn[ií]\s*p[rř][ií]slu[sš]nost|nationaliteit)\b/i,
     ],
   },
   {
     field: 'issuingCountry',
     patterns: [
-      /\b(?:issuing\s*(?:state|country)|country\s*code|state\s*of\s*issue|pays\s*[eé]metteur|c[oó]digo|cdigo|code\s*\/\s*code)\b/i,
+      /\b(?:issuing\s*(?:state|country)|country\s*code|state\s*of\s*issue|pays\s*[eé]metteur|c[oó]digo|cdigo|code\s*\/\s*code|valstyb[eė]s\s*kodas|k[oó]d\s*st[aá]tu)\b/i,
     ],
   },
   {
     field: 'dateOfBirth',
     patterns: [
-      /\b(?:date\s*of\s*birth|birth\s*date|dob|born\s*on|date\s*de\s*naissance|geburtsdatum|geburtstag|fecha\s*de\s*nacimiento|data\s*di\s*nascita|data\s*urodzenia)\b/i,
+      /\b(?:date\s*of\s*birth|birth\s*date|dob|born\s*on|date\s*de\s*naissance|geburtsdatum|geburtstag|fecha\s*de\s*nacimiento|data\s*de\s*nascimento|data\s*di\s*nascita|data\s*urodzenia|geboortedatum|gimimo\s*data|datum\s*narozen[ií])\b/i,
       /^(?:3)[.)]\s*/i,
     ],
   },
   {
     field: 'placeOfBirth',
     patterns: [
-      /\b(?:place\s*of\s*b(?:ir|e)th|birth\s*place|birthplace|lieu\s*de\s*naissance|geburtsort|lugar\s*de\s*nacimiento|luogo\s*di\s*nascita|miejsce\s*urodzenia)\b/i,
+      /\b(?:place\s*of\s*b(?:ir|e)th|birth\s*place|birthplace|lieu\s*de\s*naissance|geburtsort|lugar\s*de\s*nacimiento|naturalidade|luogo\s*di\s*nascita|miejsce\s*urodzenia|geboorteplaats|gimimo\s*vieta|m[ií]sto\s*narozen[ií])\b/i,
     ],
   },
   {
@@ -215,45 +254,45 @@ const LABEL_RULES: LabelRule[] = [
   {
     field: 'dateOfIssue',
     patterns: [
-      /\b(?:date\s*of\s*issue|issue\s*date|issued(?:\s*on)?|iss|date\s*de\s*d[eé]livrance|ausstellungsdatum|fecha\s*de\s*expedici[oó]n|rilasciato\s*il|data\s*wydania|datum\s*[\/|]\s*[do]?[ao]te)\b/i,
+      /\b(?:date\s*of\s*issue|issue\s*date|issued(?:\s*on)?|iss|date\s*de\s*d[eé]livrance|ausstellungsdatum|fecha\s*de\s*expedici[oó]n|data\s*de\s*emiss[aã]o|rilasciato\s*il|data\s*wydania|datum\s*[\/|]\s*[do]?[ao]te|i[sš]davimo\s*data|datum\s*vyd[aá]n[ií]|afgiftedatum)\b/i,
       /^(?:4a)[.)]\s*/i,
     ],
   },
   {
     field: 'dateOfExpiry',
     patterns: [
-      /\b(?:date\s*of\s*expir(?:y|ation)|expir(?:y|es|ation)(?:\s*date)?|valid\s*(?:until|thru|to)|exp|date\s*d['’]expiration|g[uü]ltig\s*bis|fecha\s*de\s*caducidad|scadenza|data\s*wa[zż]no[sś]ci)\b/i,
+      /\b(?:date\s*of\s*expir(?:y|ation)|expir(?:y|es|ation)(?:\s*date)?|valid\s*(?:until|thru|to)|exp|date\s*d['’]expiration|g[uü]ltig\s*bis|fecha\s*de\s*caducidad|data\s*de\s*validade|scadenza|data\s*wa[zż]no[sś]ci|galioja\s*iki|platnost\s*do|geldig\s*tot)\b/i,
       /^(?:4b)[.)]\s*/i,
     ],
   },
   {
     field: 'sex',
-    patterns: [/\b(?:sex|gender|sexe|geschlecht|sexo|sesso|p[lł]e[cć])\b/i],
+    patterns: [/\b(?:sex|gender|sexe|geschlecht|sexo|sesso|p[lł]e[cć]|lytis|pohlav[ií]|geslacht)\b/i],
   },
   {
     field: 'issuingAuthority',
     patterns: [
-      /\b(?:authorit(?:y|ies)|issuing\s*(?:authority|office|agency)|autorit[eéa]|beh[oö]rde|behdrde|autoridad|wydany\s*przez|organ\s*wydaj[aą]cy|equipo)\b/i,
+      /\b(?:authorit(?:y|ies)|issuing\s*(?:authority|office|agency)|autorit[eéa]|beh[oö]rde|behdrde|autoridad|autoridade|wydany\s*przez|organ\s*wydaj[aą]cy|equipo|i[sš]dav[eė]|vydal)\b/i,
       /^(?:4c|9)[.)]\s*/i,
     ],
   },
   {
     field: 'address',
     patterns: [
-      /\b(?:address|anschrift|residence|domicilio|domicile|adresse|wohnsitz|direcci[oó]n|indirizzo|adres)\b/i,
+      /\b(?:address|anschrift|residence|domicilio|domicile|adresse|wohnsitz|direcci[oó]n|morada|indirizzo|adres|adresa)\b/i,
       /^(?:8)[.)]\s*/i,
     ],
   },
   {
     field: 'licenseClass',
     patterns: [
-      /\b(?:class|category|categories|cat[eé]gorie|klasse|categor[ií]a)\b/i,
+      /\b(?:class|category|categories|cat[eé]gorie|klasse|categor[ií]a|kategorie|kategorija)\b/i,
       /^(?:9)[.)]\s*/i,
     ],
   },
   {
     field: 'restrictions',
-    patterns: [/\b(?:restrictions?|rest|conditions|auflagen)\b/i, /^(?:12)[.)]\s*/i],
+    patterns: [/\b(?:restrictions?|rest|conditions|auflagen|omezen[ií])\b/i, /^(?:12)[.)]\s*/i],
   },
   {
     field: 'endorsements',
@@ -261,12 +300,12 @@ const LABEL_RULES: LabelRule[] = [
   },
   {
     field: 'height',
-    patterns: [/\b(?:height|hgt|haigh|gr[oö][sß]e|grobe|taille|estatura|statura|wzrost)\b/i],
+    patterns: [/\b(?:height|hgt|haigh|gr[oö][sß]e|grobe|taille|estatura|altura|statura|wzrost|[uū]gis|v[yý][sš]ka|lengte)\b/i],
   },
   {
     field: 'eyeColor',
     patterns: [
-      /\b(?:eye\s*colou?r|colour\s*of\s*[es]yes|augenfarbe|avgenfarbe|avg[eo]n\w*|couleur\s*des\s*yeux|covl[eo]ur\s*des\s*ye\w*|yeux|augen|ojos|occhi)\b/i,
+      /\b(?:eye\s*colou?r|colour\s*of\s*[es]yes|augenfarbe|avgenfarbe|avg[eo]n\w*|couleur\s*des\s*yeux|covl[eo]ur\s*des\s*ye\w*|yeux|augen|ojos|occhi|barva\s*o[cč][ií])\b/i,
     ],
   },
   {
@@ -277,7 +316,7 @@ const LABEL_RULES: LabelRule[] = [
 
 // Secondary non-target label headers that must be skipped and terminate column collection
 const STOP_LABEL_PATTERNS: RegExp[] = [
-  /\b(?:doktorgrad|doctoral\s*degr|degn?\s*ree|grade\s*de\s*docteur|ordens|rdens|oder\s*k[uü]nst|k[uü]nstlername|kinermamo|kinlenamo|kintlemamo|lername|no[em]\s+de\s+religion|rotgious|otgious|religious\s*name|stage\s*or\s*pen|nom\s*d['’]?artiste|pseudonyn|pseudonym|signature|unterschrift|firma\s*del\s*titular|holder['’]?s\s*signature)\b/i,
+  /\b(?:doktorgrad|doctoral\s*degr|degn?\s*ree|grade\s*de\s*docteur|ordens|rdens|oder\s*k[uü]nst|k[uü]nstlername|kinermamo|kinlenamo|kintlemamo|lername|no[em]\s+de\s+religion|rotgious|otgious|religious\s*name|stage\s*or\s*pen|nom\s*d['’]?artiste|pseudonyn|pseudonym|signature|unterschrift|firma\s*del\s*titular|holder['’]?s\s*signature|para[sš]as|podpis)\b/i,
 ];
 
 function stripMatchedLabel(line: string, patterns: RegExp[]): string {
@@ -297,7 +336,7 @@ function stripMatchedLabel(line: string, patterns: RegExp[]): string {
 
   return stripped
     .replace(/^[\s/:|.\-–—]+/, '')
-    .replace(/^(?:[\/|][A-Za-zÀ-ÿ\s]+)+[:\-]?\s*/, '')
+    .replace(/^(?:[\/|][A-Za-z\u00C0-\u024F\s]+)+[:\-]?\s*/, '')
     .trim();
 }
 
@@ -350,8 +389,8 @@ function cleanVisualValue(val: string, preserveTrailingDigit = false): string {
   } else {
     // Strip watermark hyphens/dots right before house numbers while preserving "DORFSTR. 23"
     out = out
-      .replace(/([A-ZÄÖÜ]{2,}STRASSE)[-.\s]+\s*(\d)/gi, '$1 $2')
-      .replace(/([A-ZÄÖÜ]{3,})[-~]\s+(\d)/gi, '$1 $2')
+      .replace(/([A-Z\u00C0-\u024F]{2,}STRASSE)[-.\s]+\s*(\d)/gi, '$1 $2')
+      .replace(/([A-Z\u00C0-\u024F]{3,})[-~]\s+(\d)/gi, '$1 $2')
       .replace(/(\d)\.$/, '$1');
   }
   return out.replace(/\s+/g, ' ').trim();
@@ -359,24 +398,30 @@ function cleanVisualValue(val: string, preserveTrailingDigit = false): string {
 
 function detectDocumentTypeHint(text: string): DocumentType | null {
   const upper = text.toUpperCase();
-  if (/\b(?:PASSPORT|PASSEPORT|PASAPORTE|REISEPASS|PASSAPORTO|PASZPORT)\b/.test(upper)) {
+  if (
+    /\b(?:PASSPORT|PASSEPORT|PASAPORTE|REISEPASS|PASSAPORTO|PASZPORT|PASAS|CESTOVN[IÍ]\s*PAS)\b/.test(
+      upper
+    )
+  ) {
     return 'passport';
   }
   if (
-    /\b(?:DRIVER(?:'S)?\s*LICEN[CS]E|DRIVING\s*LICEN[CS]E|PERMIS\s*DE\s*CONDUIRE|F[UÜ]HRERSCHEIN|PRAWO\s*JAZDY)\b/.test(
+    /\b(?:DRIVER(?:'S)?\s*LICEN[CS]E|DRIVING\s*LICEN[CS]E|PERMIS\s*DE\s*CONDUIRE|F[UÜ]HRERSCHEIN|PRAWO\s*JAZDY|RIJBEWIJS|CARN[EÉ]\s*DE\s*CONDUCIR)\b/.test(
       upper
     )
   ) {
     return 'driver_license';
   }
-  if (/\b(?:RESIDENCE\s*PERMIT|TITRE\s*DE\s*S[EÉ]JOUR|AUFENTHALTSTITEL|KARTA\s*POBYTU)\b/.test(upper)) {
+  if (
+    /\b(?:RESIDENCE\s*PERMIT|TITRE\s*DE\s*S[EÉ]JOUR|AUFENTHALTSTITEL|KARTA\s*POBYTU)\b/.test(upper)
+  ) {
     return 'residence_permit';
   }
   if (/\b(?:VISA|VISUM)\b/.test(upper)) {
     return 'visa';
   }
   if (
-    /\b(?:IDENTITY\s*CARD|ID\s*CARD|NATIONAL\s*ID|CARTE\s*NATIONALE|PERSONALAUSWEIS|ANSCHRIFT|AUGENFARBE|DOW[OÓ]D\s*OSOBISTY|CARTA\s*D'IDENTIT[AÀ]|DNI)\b/.test(
+    /\b(?:IDENTITY\s*CARD|ID\s*CARD|NATIONAL\s*ID|CARTE\s*NATIONALE|PERSONALAUSWEIS|ANSCHRIFT|AUGENFARBE|DOW[OÓ]D\s*OSOBISTY|CARTA\s*D'IDENTIT[AÀ]|DNI|ASMENS\s*TAPATYB[EĖ]S|OB[CČ]ANSK[YÝ]\s*PR[UŮ]KAZ|IDENTITEITSKAART|CART[AÃ]O\s*DE\s*CIDAD[AÃ]O)\b/.test(
       upper
     )
   ) {
@@ -387,8 +432,12 @@ function detectDocumentTypeHint(text: string): DocumentType | null {
 
 function parseSexValue(val: string): 'M' | 'F' | 'X' | null {
   const upper = val.trim().toUpperCase();
-  if (/^(?:M|MALE|HOMME|M[AÄ]NNLICH|MASCULINO|M[EĘ][ZŻ]CZYZNA)$/.test(upper)) return 'M';
-  if (/^(?:F|FEMALE|FEMME|WEIBLICH|FEMENINO|KOBIETA)$/.test(upper)) return 'F';
+  if (/^(?:M|MALE|HOMME|M[AÄ]NNLICH|MASCULINO|M[EĘ][ZŻ]CZYZNA|MU[ZŽ]|VYR\.?)$/.test(upper)) {
+    return 'M';
+  }
+  if (/^(?:F|FEMALE|FEMME|WEIBLICH|FEMENINO|KOBIETA|[ZŽ]ENA|MOT\.?|V)$/.test(upper)) {
+    return 'F';
+  }
   if (/^(?:X|NON[- ]?BINARY|OTHER|DIVERS)$/.test(upper)) return 'X';
   if (upper.startsWith('M/') || upper === 'M') return 'M';
   if (upper.startsWith('F/') || upper === 'F') return 'F';
@@ -414,7 +463,7 @@ function isInSameColumnBelow(label: VizLineBox, cand: VizLineBox): boolean {
 function isCleanPlacePart(text: string): boolean {
   if (text.length < 2) return false;
   if (/[{}|\[\]<>~]/.test(text)) return false;
-  if (!/[A-ZÄÖÜÑ]{2,}/.test(text)) return false;
+  if (!/[A-Z\u00C0-\u024F]{2,}/.test(text)) return false;
   return true;
 }
 
@@ -478,7 +527,9 @@ export function parseVizText(
     if (STOP_LABEL_PATTERNS.some((p) => p.test(line))) continue;
 
     const box = hasBoxes ? cleanBoxes[i] : null;
-    const kvMatch = line.match(/^([A-Za-z][A-Za-z0-9\s/().'-]{1,32}):\s*(.+)$/);
+    const kvMatch = line.match(
+      /^([A-Za-z\u00C0-\u024F][A-Za-z0-9\u00C0-\u024F\s/().'-]{1,32}):\s*(.+)$/
+    );
     let matchedKnownRule = false;
 
     for (const rule of LABEL_RULES) {

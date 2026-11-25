@@ -2,6 +2,7 @@ export type DocumentType = 'passport' | 'id_card' | 'driver_license' | 'residenc
 export type MrzFormat = 'TD1' | 'TD2' | 'TD3' | 'MRVA' | 'MRVB';
 export type FieldSource = 'MRZ' | 'VIZ' | 'MRZ+VIZ' | 'COMPUTED';
 export type MrzOcrModel = 'ocrb' | 'standard';
+export type VizLanguageMode = 'auto' | 'multilingual' | 'standard';
 export type QualityIssueCode = 'too_blurry' | 'glare_detected' | 'too_dark' | 'too_bright' | 'no_document' | 'camera_moving';
 export interface QualityGateOptions {
     /** Minimum focus/edge sharpness score [0..100] required to pass (default: 34) */
@@ -193,6 +194,10 @@ export interface ExtractedIdentity {
     mrz: MrzParsedData | null;
     /** MRZ OCR model actually used for the dedicated MRZ pass ('ocrb' or 'standard') */
     mrzModel?: MrzOcrModel;
+    /** VIZ language strategy used for Visual Inspection Zone extraction */
+    vizLanguageMode?: VizLanguageMode;
+    /** Final Tesseract language pack string used for VIZ OCR (e.g. 'eng', 'eng+deu', 'eng+deu+spa+fra') */
+    vizLanguage?: string;
     unmappedFields: Record<string, string>;
     fieldSources: Record<string, FieldSource>;
     rawOcrText: string;
@@ -231,7 +236,7 @@ export interface MergedDocumentResult extends ExtractedIdentity {
     /** True when no key identity conflicts exist between front and back */
     sidesConsistent: boolean;
 }
-export type ScanStage = 'quality_check' | 'detecting_perspective' | 'detecting_orientation' | 'preprocessing' | 'initializing_ocr' | 'recognizing_full' | 'recognizing_mrz' | 'parsing' | 'complete';
+export type ScanStage = 'quality_check' | 'detecting_perspective' | 'detecting_orientation' | 'preprocessing' | 'initializing_ocr' | 'recognizing_full' | 'recognizing_viz_native' | 'recognizing_mrz' | 'parsing' | 'complete';
 export interface ScanProgress {
     stage: ScanStage;
     progress: number;
@@ -254,9 +259,15 @@ export interface TesseractWorkerConfig {
     mrzLangPath?: string;
     /** Whether the MRZ traineddata at mrzLangPath is .gz compressed (defaults to false) */
     mrzGzip?: boolean;
+    /** VIZ language strategy: 'auto' (country-routed native pass default), 'multilingual' (single-pass bundle), or 'standard' (eng only) */
+    vizLanguageMode?: VizLanguageMode;
+    /** Explicit Tesseract VIZ language string override (e.g. 'eng+deu', 'pol+eng', 'eng+deu+spa+fra') */
+    vizLanguages?: string;
+    /** Custom/override ICAO alpha-3 country -> Tesseract traineddata map (e.g. { POL: 'pol' }) */
+    vizLanguageMap?: Record<string, string>;
 }
 export interface ScannerOptions extends TesseractWorkerConfig {
-    /** Tesseract language code(s) for full-page VIZ OCR (and MRZ fallback), defaults to 'eng' */
+    /** Primary Tesseract language code(s) for full-page VIZ OCR (and MRZ fallback), defaults to 'eng' */
     language?: string;
     /** Apply grayscale & contrast stretching before OCR (default: true) */
     preprocess?: boolean;

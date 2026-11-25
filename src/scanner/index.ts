@@ -16,6 +16,14 @@ export {
 export { parseMrzFromText, computeCheckDigit } from './mrzParser';
 export { parseVizText, normalizeVisualDate } from './vizParser';
 export {
+  DEFAULT_COUNTRY_VIZ_LANGUAGES,
+  DEFAULT_MULTILINGUAL_VIZ_LANGUAGES,
+  ENGLISH_PRIMARY_COUNTRY_CODES,
+  inferNativeVizLanguageFromText,
+  resolveNativeVizLanguage,
+  resolveVizPassStrategy,
+} from './vizLanguages';
+export {
   loadImageElement,
   preprocessDocumentImage,
   sampleDownscaledGrayscale,
@@ -48,6 +56,7 @@ export type {
   ScannerOptions,
   SideConsistencyConflict,
   TesseractWorkerConfig,
+  VizLanguageMode,
   VizLineBox,
   VizParsedData,
 } from './types';

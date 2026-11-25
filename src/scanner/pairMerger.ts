@@ -592,6 +592,11 @@ export function mergeDocumentSides(
   const confidence = Math.round((front.confidence + back.confidence) / 2);
   const processingTimeMs = front.processingTimeMs + back.processingTimeMs;
 
+  const preferredSide = backHasMrz ? back : front;
+  const vizLanguageMode =
+    preferredSide.vizLanguageMode ?? front.vizLanguageMode ?? back.vizLanguageMode;
+  const vizLanguage = preferredSide.vizLanguage ?? front.vizLanguage ?? back.vizLanguage;
+
   return {
     documentType: resolveDocumentType(front, back),
     documentFormat: winningMrz ? winningMrz.format : 'VISUAL_ONLY',
@@ -627,6 +632,8 @@ export function mergeDocumentSides(
       winningMrz === back.mrz
         ? (back.mrzModel ?? front.mrzModel)
         : (front.mrzModel ?? back.mrzModel),
+    vizLanguageMode,
+    vizLanguage,
     unmappedFields,
     fieldSources,
     rawOcrText: mergedRawOcrText,

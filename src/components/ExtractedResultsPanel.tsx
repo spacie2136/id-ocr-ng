@@ -200,6 +200,14 @@ export const ExtractedResultsPanel: React.FC<ExtractedResultsPanelProps> = ({
                   </span>
                 </>
               )}
+              {result.vizLanguage && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span className="font-mono text-slate-700">
+                    VIZ: {result.vizLanguage}
+                  </span>
+                </>
+              )}
               {result.quality && (
                 <>
                   <span aria-hidden="true">·</span>

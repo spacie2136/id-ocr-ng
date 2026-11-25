@@ -5,7 +5,8 @@ export { detectDocumentQuad, orderQuadCorners, warpDocumentPerspective, } from '
 export { assessImageQuality, assessCanvasQuality, CameraAutoCapture, watchCameraAutoCapture, QualityGateError, } from './qualityGate';
 export { parseMrzFromText, computeCheckDigit } from './mrzParser';
 export { parseVizText, normalizeVisualDate } from './vizParser';
+export { DEFAULT_COUNTRY_VIZ_LANGUAGES, DEFAULT_MULTILINGUAL_VIZ_LANGUAGES, ENGLISH_PRIMARY_COUNTRY_CODES, inferNativeVizLanguageFromText, resolveNativeVizLanguage, resolveVizPassStrategy, } from './vizLanguages';
 export { loadImageElement, preprocessDocumentImage, sampleDownscaledGrayscale, } from './imagePreprocessor';
 export { analyzeDocumentOrientation, type OrientationAnalysis } from './orientation';
 export { ICAO_COUNTRY_CODES, resolveCountryName } from './countries';
-export type { CameraAutoCaptureOptions, CheckDigitStatus, DocumentQuad, DocumentType, ExtractedIdentity, FieldSource, GrayscaleBuffer, ImageInput, ImageQualityReport, MergedDocumentResult, MrzFormat, MrzOcrModel, MrzParsedData, OrientationInfo, PairScanOptions, PerspectiveInfo, Point2D, PreprocessedResult, QualityGateOptions, QualityIssueCode, ScanProgress, ScanStage, ScannerOptions, SideConsistencyConflict, TesseractWorkerConfig, VizLineBox, VizParsedData, } from './types';
+export type { CameraAutoCaptureOptions, CheckDigitStatus, DocumentQuad, DocumentType, ExtractedIdentity, FieldSource, GrayscaleBuffer, ImageInput, ImageQualityReport, MergedDocumentResult, MrzFormat, MrzOcrModel, MrzParsedData, OrientationInfo, PairScanOptions, PerspectiveInfo, Point2D, PreprocessedResult, QualityGateOptions, QualityIssueCode, ScanProgress, ScanStage, ScannerOptions, SideConsistencyConflict, TesseractWorkerConfig, VizLanguageMode, VizLineBox, VizParsedData, } from './types';

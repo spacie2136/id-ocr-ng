@@ -10,6 +10,7 @@ import {
   type MergedDocumentResult,
   type MrzOcrModel,
   type ScanProgress,
+  type VizLanguageMode,
 } from './scanner';
 
 type AppView = 'workbench' | 'history' | 'integration';
@@ -42,6 +43,9 @@ export default function App() {
   const [preprocess, setPreprocess] = useState(true);
   const [enhanceMrzPass, setEnhanceMrzPass] = useState(true);
   const [mrzModel, setMrzModel] = useState<MrzOcrModel>('ocrb');
+  const [vizLanguageMode, setVizLanguageMode] = useState<VizLanguageMode>('auto');
+  const [useCustomVizLanguages, setUseCustomVizLanguages] = useState(false);
+  const [customVizLanguages, setCustomVizLanguages] = useState('eng+deu');
 
   const [isScanning, setIsScanning] = useState(false);
   const [progress, setProgress] = useState<ScanProgress | null>(null);
@@ -88,6 +92,8 @@ export default function App() {
         prep: boolean;
         mrzPass: boolean;
         mrzModel: MrzOcrModel;
+        vizMode: VizLanguageMode;
+        customViz: string | undefined;
       }
     ) => {
       if (!scannerRef.current) {
@@ -105,6 +111,8 @@ export default function App() {
         const extracted = await scannerRef.current.scan(fileToScan, {
           language: 'eng',
           mrzModel: opts.mrzModel,
+          vizLanguageMode: opts.vizMode,
+          vizLanguages: opts.customViz,
           preprocess: opts.prep,
           enhanceMrzPass: opts.mrzPass,
           perspectiveCorrection: opts.persp,
@@ -153,6 +161,8 @@ export default function App() {
         prep: boolean;
         mrzPass: boolean;
         mrzModel: MrzOcrModel;
+        vizMode: VizLanguageMode;
+        customViz: string | undefined;
       }
     ) => {
       if (!scannerRef.current) {
@@ -170,6 +180,8 @@ export default function App() {
         const merged = await scannerRef.current.scanPair(fFile, bFile, {
           language: 'eng',
           mrzModel: opts.mrzModel,
+          vizLanguageMode: opts.vizMode,
+          vizLanguages: opts.customViz,
           preprocess: opts.prep,
           enhanceMrzPass: opts.mrzPass,
           perspectiveCorrection: opts.persp,
@@ -207,6 +219,8 @@ export default function App() {
     []
   );
 
+  const activeCustomViz = useCustomVizLanguages ? customVizLanguages.trim() || 'eng' : undefined;
+
   const handleSelectFile = (file: File) => {
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     const nextUrl = URL.createObjectURL(file);
@@ -226,6 +240,8 @@ export default function App() {
       prep: preprocess,
       mrzPass: enhanceMrzPass,
       mrzModel,
+      vizMode: vizLanguageMode,
+      customViz: activeCustomViz,
     });
   };
 
@@ -257,6 +273,8 @@ export default function App() {
           prep: preprocess,
           mrzPass: enhanceMrzPass,
           mrzModel,
+          vizMode: vizLanguageMode,
+          customViz: activeCustomViz,
         });
       }
     } else {
@@ -270,6 +288,8 @@ export default function App() {
           prep: preprocess,
           mrzPass: enhanceMrzPass,
           mrzModel,
+          vizMode: vizLanguageMode,
+          customViz: activeCustomViz,
         });
       }
     }
@@ -315,6 +335,8 @@ export default function App() {
         prep: preprocess,
         mrzPass: enhanceMrzPass,
         mrzModel,
+        vizMode: vizLanguageMode,
+        customViz: activeCustomViz,
       });
       return;
     }
@@ -328,6 +350,8 @@ export default function App() {
       prep: preprocess,
       mrzPass: enhanceMrzPass,
       mrzModel,
+      vizMode: vizLanguageMode,
+      customViz: activeCustomViz,
     });
   };
 
@@ -447,7 +471,7 @@ export default function App() {
           </h1>
           <p className="text-sm text-slate-600 mt-1 max-w-3xl">
             {activeView === 'workbench'
-              ? 'Auto-rectifies 4-corner perspective, straightens rotated scans, merges front & back IDs, and extracts Machine Readable Zone check digits (OCR-B default) and Visual Inspection Zone fields client-side.'
+              ? 'Auto-rectifies 4-corner perspective, straightens rotated scans, merges front & back IDs, and extracts Machine Readable Zone check digits (OCR-B default) and country-routed native Visual Inspection Zone fields client-side.'
               : activeView === 'history'
                 ? 'In-memory scans processed during this browser session. No document images or personal data leave your device.'
                 : 'Drop-in TypeScript module architecture designed to be copied or embedded via CDN straight into web applications.'}
@@ -475,6 +499,9 @@ export default function App() {
                 preprocess={preprocess}
                 enhanceMrzPass={enhanceMrzPass}
                 mrzModel={mrzModel}
+                vizLanguageMode={vizLanguageMode}
+                useCustomVizLanguages={useCustomVizLanguages}
+                customVizLanguages={customVizLanguages}
                 onChangeScanMode={(mode) => {
                   setScanMode(mode);
                   setResult(null);
@@ -491,6 +518,12 @@ export default function App() {
                 onTogglePreprocess={setPreprocess}
                 onToggleMrzPass={setEnhanceMrzPass}
                 onChangeMrzModel={setMrzModel}
+                onChangeVizLanguageMode={(mode) => {
+                  setUseCustomVizLanguages(false);
+                  setVizLanguageMode(mode);
+                }}
+                onToggleCustomVizLanguages={setUseCustomVizLanguages}
+                onChangeCustomVizLanguages={setCustomVizLanguages}
                 onTriggerScan={handleTriggerScan}
               />
             </div>
@@ -584,6 +617,9 @@ export default function App() {
                               }
                               if (item.result.mrzModel) {
                                 setMrzModel(item.result.mrzModel);
+                              }
+                              if (item.result.vizLanguageMode) {
+                                setVizLanguageMode(item.result.vizLanguageMode);
                               }
                               setResult(item.result);
                               setActiveView('workbench');

@@ -1,18 +1,19 @@
-# DocScan Browser OCR (`v0.0.3`)
+# DocScan Browser OCR (`v0.0.4`)
 
 Client-side browser OCR and identity document parser for **passports, national ID cards, residence permits, visas, and driver licenses** — running 100% in the browser with WebAssembly (`tesseract.js`) and zero document uploads to external servers.
 
 ## Features
 
+- **Multilingual VIZ Language Passes (`auto` Native Default)**: Automatically routes non-English documents (detected via MRZ issuing state/nationality or visual VIZ header cues) to a targeted native-script Tesseract VIZ pass (`eng+deu`, `eng+spa`, `eng+fra`, `eng+ces`, `eng+lit`, `eng+pol`, etc.) while keeping English documents at 0ms overhead. Restores native diacritics (`ÄÖÜß`, `Ñ`, `ÉÈÇ`, `ČĖŠŽ`) and enriches single-side MRZ names without manual setup. Supports switching to single-pass `vizLanguageMode: 'multilingual'` (`eng+deu+spa+fra`), `'standard'` (`eng` only), or forcing any language pack via `vizLanguages` / `vizLanguageMap`.
 - **Live Camera Auto-Capture & Image Quality Gate**: Real-time `<video>` stream watcher (`CameraAutoCapture` / `watchCameraAutoCapture`) and `assessImageQuality()` helper measuring focus sharpness, specular glare hotspots, lighting exposure, 4-corner document framing, and frame-to-frame hold stability before triggering auto-shutter (or rejecting low-quality uploads via `enforceQualityGate: true`).
-- **Dedicated OCR-B MRZ Engine (Default)**: Uses an integer-quantized OCR-B traineddata model (`ocrb_int`, ~1.45 MB cached in IndexedDB) for the dedicated MRZ strip pass—yielding ~30% more valid ICAO check digits than `eng` across varied passport/ID specimens—while keeping Visual Zone OCR on `eng`. Pass `mrzModel: 'standard'` anytime to switch MRZ recognition back to the standard language model (`eng`).
+- **Dedicated OCR-B MRZ Engine (Default)**: Uses an integer-quantized OCR-B traineddata model (`ocrb_int`, ~1.45 MB cached in IndexedDB) for the dedicated MRZ strip pass—yielding ~30% more valid ICAO check digits than `eng` across varied passport/ID specimens. Pass `mrzModel: 'standard'` anytime to switch MRZ recognition back to the standard language model (`eng`).
 - **ICAO 9303 MRZ Parsing**: Supports `TD1` (3×30 ID cards), `TD2` (2×36), `TD3` (2×44 passports), and `MRV-A` / `MRV-B` (visas) with Modulo-10 check-digit validation.
-- **Visual Inspection Zone (VIZ) Extraction**: Multilingual field extraction for names (including compound/double surnames), dates, residential addresses, place of birth, issuing authority, sex, height, eye color, and driver license categories.
+- **Visual Inspection Zone (VIZ) Extraction**: Pan-European multilingual field extraction for names (including compound/double surnames), dates, residential addresses, place of birth, issuing authority, sex, height, eye color, and driver license categories.
 - **4-Corner Perspective Correction**: Pure-JS automatic document quadrilateral detection + 3×3 homography bilinear dewarping (plus optional manual `corners` override) for angled mobile or tabletop photos.
 - **Two-Sided Document Merging**: `scanPair()` / `scanDocumentPair()` / `mergeDocumentSides()` combine front and back scans (even if swapped), enrich diacritics & missing fields, and validate cross-side consistency.
 - **Auto-Rotate & Deskew**: Pure-JS fine tilt estimation (`±45°`) + 4-way orientation detection (`0°`, `90°`, `180°`, `270°`) with upright OCR verification.
 - **Dual-Pass Image Preprocessing**: Adaptive contrast stretching, flat-field lighting normalization, and dedicated MRZ strip isolation.
-- **Framework-Agnostic SDK (`src/scanner/`)**: Zero React or UI dependencies; ships with ready-compiled `latest` and version-pinned (`v0.0.3`) ESM & UMD browser bundles plus TypeScript `.d.ts` declarations in `public/lib/`.
+- **Framework-Agnostic SDK (`src/scanner/`)**: Zero React or UI dependencies; ships with ready-compiled `latest` and version-pinned (`v0.0.4`) ESM & UMD browser bundles plus TypeScript `.d.ts` declarations in `public/lib/`.
 
 See [ROADMAP.md](./ROADMAP.md) for shipped capabilities and upcoming enhancements.
 
@@ -20,7 +21,7 @@ See [ROADMAP.md](./ROADMAP.md) for shipped capabilities and upcoming enhancement
 
 ## Using jsDelivr Directly From GitHub (`latest` or Pinned Version)
 
-Once `public/lib/` is pushed to your public GitHub repository, remote websites can load either the **always-latest** bundle (`docscan-ocr.latest.*`) or a **version-pinned** bundle (`docscan-ocr.v0.0.3.*`) directly through jsDelivr.
+Once `public/lib/` is pushed to your public GitHub repository, remote websites can load either the **always-latest** bundle (`docscan-ocr.latest.*`) or a **version-pinned** bundle (`docscan-ocr.v0.0.4.*`) directly through jsDelivr.
 
 ### Option A: Classic `<script>` Tag (UMD Bundle)
 
@@ -42,13 +43,14 @@ Always load the latest build from your `main` branch:
     const identity = await scanner.scan(file, {
       perspectiveCorrection: true,
       autoRotate: true,
-      mrzModel: 'ocrb', // default; set to 'standard' to use eng for MRZ
+      mrzModel: 'ocrb',        // default; set to 'standard' to use eng for MRZ
+      vizLanguageMode: 'auto', // default; routes non-English docs to native scripts
       onProgress: ({ stage, progress, message }) => {
         console.log(`[${stage}] ${progress}% - ${message}`);
       },
     });
 
-    console.log(identity);
+    console.log(identity.fullName, identity.vizLanguage, identity);
   });
 
   // Or attach live auto-capture to a <video> webcam element
@@ -62,7 +64,7 @@ Always load the latest build from your `main` branch:
 Or pin a specific Git tag/version for immutable production caching:
 
 ```html
-<script src="https://cdn.jsdelivr.net/gh/<USERNAME>/<REPO>@v0.0.3/public/lib/docscan-ocr.v0.0.3.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/<USERNAME>/<REPO>@v0.0.4/public/lib/docscan-ocr.v0.0.4.umd.js"></script>
 ```
 
 ### Option B: Native Browser ES Module (`<script type="module">`)
@@ -77,7 +79,7 @@ Or pin a specific Git tag/version for immutable production caching:
     SCANNER_VERSION,
   } from 'https://cdn.jsdelivr.net/gh/<USERNAME>/<REPO>@main/public/lib/docscan-ocr.latest.es.js';
 
-  // Single document (auto perspective + auto-rotate + OCR-B MRZ default + quality report)
+  // Single document (auto perspective + auto-rotate + OCR-B MRZ + auto native VIZ pass)
   const identity = await scanDocumentImage(fileOrDataUrl, {
     perspectiveCorrection: true,
     autoRotate: true,
@@ -91,7 +93,7 @@ Or pin a specific Git tag/version for immutable production caching:
   // Or scan & merge a two-sided national ID (front + back)
   // const merged = await scanDocumentPair(frontFile, backFile);
 
-  console.log(`v${SCANNER_VERSION}`, identity);
+  console.log(`v${SCANNER_VERSION}`, identity.vizLanguage, identity);
 </script>
 ```
 
@@ -118,7 +120,7 @@ Or pin a specific Git tag/version for immutable production caching:
 npm install github:<your-username>/<your-repo>
 
 # Or pin a release tag / commit
-npm install github:<your-username>/<your-repo>#v0.0.3
+npm install github:<your-username>/<your-repo>#v0.0.4
 
 # Or install from a local clone on your machine
 npm install ../path/to/docscan-ocr
@@ -137,7 +139,8 @@ import {
 } from 'docscan-ocr';
 
 const scanner = new DocumentScanner({
-  mrzModel: 'ocrb', // default ('standard' reverts MRZ to eng)
+  mrzModel: 'ocrb',        // default ('standard' reverts MRZ to eng)
+  vizLanguageMode: 'auto', // default ('multilingual' | 'standard')
 });
 
 // Single document
@@ -150,7 +153,7 @@ const identity = await scanner.scan(file, {
 
 // Two-sided ID (reuses warm Tesseract workers across both sides)
 const merged = await scanner.scanPair(frontFile, backFile);
-console.log(merged.fullName, merged.address, merged.sidesConsistent, merged.conflicts);
+console.log(merged.fullName, merged.address, merged.vizLanguage, merged.sidesConsistent);
 
 // Call when unmounting / done scanning
 await scanner.terminate();
@@ -160,7 +163,34 @@ await scanner.terminate();
 
 ## Other Integration Methods
 
-### 1. Live Camera Auto-Capture & Image Quality Gate
+### 1. Multilingual VIZ Language Modes & Custom Overrides
+
+Three VIZ language modes are available (plus direct `vizLanguages` / `vizLanguageMap` overrides):
+
+- `'auto'` **(Default)**: Runs fast primary recognition (`eng`) + MRZ decoding first, then inspects the MRZ issuing country / nationality or visual card headers (e.g., `REINO DE ESPAÑA`, `BUNDESREPUBLIK DEUTSCHLAND`, `LIETUVOS RESPUBLIKA`) and lazily runs a warm native-script VIZ pass (`eng+deu`, `eng+spa`, `eng+fra`, `eng+ces`, `eng+lit`, etc.) only for non-English documents. Restores native diacritics into both VIZ fields and single-side MRZ names (`BASANAVIČIENĖ`, `ESPAÑOLA`, `KÖLN`), with silent offline fallback if traineddata cannot be fetched.
+- `'multilingual'`: Single-pass bundled traineddata (`eng+deu+spa+fra`) loaded directly on the primary worker without country routing.
+- `'standard'`: Classic English-only VIZ recognition (`eng`) with zero extra traineddata downloads.
+
+```ts
+// Single-pass EFIGS multi-script mode
+await scanner.scan(file, { vizLanguageMode: 'multilingual' });
+
+// Classic English-only VIZ mode
+await scanner.scan(file, { vizLanguageMode: 'standard' });
+
+// Explicit traineddata override for a specific scan
+await scanner.scan(file, { vizLanguages: 'eng+pol' });
+
+// Extend or override country -> traineddata mapping on Auto Native mode
+const customScanner = new DocumentScanner({
+  vizLanguageMap: {
+    POL: 'pol',
+    UKR: 'ukr',
+  },
+});
+```
+
+### 2. Live Camera Auto-Capture & Image Quality Gate
 
 `CameraAutoCapture` evaluates live video frames (~5–6 FPS on a 360px sample canvas) for focus sharpness, specular glare hotspots, brightness/exposure, structured document framing, and frame-to-frame steadiness, triggering a full-resolution `File` capture only after 3 consecutive crisp & stable frames:
 
@@ -184,9 +214,9 @@ const autoCapture = new CameraAutoCapture(videoElement, {
 autoCapture.start();
 ```
 
-### 2. Selecting the MRZ OCR Model (`ocrb` vs `standard`)
+### 3. Selecting the MRZ OCR Model (`ocrb` vs `standard`)
 
-By default (`mrzModel: 'ocrb'`), the dedicated MRZ strip pass lazily initializes a lightweight `ocrb_int` worker (`https://cdn.jsdelivr.net/gh/Shreeshrii/tessdata_ocrb@master`, uncompressed `gzip: false`) while full-page VIZ OCR runs on `eng`. If loading `ocrb_int` fails (e.g., strict offline environment without self-hosted `.traineddata`), the scanner silently falls back to the standard worker.
+By default (`mrzModel: 'ocrb'`), the dedicated MRZ strip pass lazily initializes a lightweight `ocrb_int` worker (`https://cdn.jsdelivr.net/gh/Shreeshrii/tessdata_ocrb@master`, uncompressed `gzip: false`) while full-page VIZ OCR runs on the configured VIZ language mode. If loading `ocrb_int` fails (e.g., strict offline environment without self-hosted `.traineddata`), the scanner silently falls back to the standard worker.
 
 To explicitly use the standard language model (`eng` or `language`) for MRZ as well:
 
@@ -196,7 +226,7 @@ const scanner = new DocumentScanner({ mrzModel: 'standard' });
 const identity = await scanner.scan(file, { mrzModel: 'standard' });
 ```
 
-### 3. Manual 4-Corner Perspective Override
+### 4. Manual 4-Corner Perspective Override
 
 If you want users to manually adjust corners in a custom UI, pass normalized `[0..1]` coordinates via `corners`:
 
@@ -211,7 +241,7 @@ const identity = await scanner.scan(angledPhoto, {
 });
 ```
 
-### 4. Copy the Standalone Source Folder (`src/scanner/`)
+### 5. Copy the Standalone Source Folder (`src/scanner/`)
 
 1. Copy the `src/scanner/` directory into your project.
 2. Install only the single runtime dependency:
@@ -220,7 +250,7 @@ const identity = await scanner.scan(angledPhoto, {
    ```
 3. Import from `./scanner`.
 
-### 5. Self-Hosting Tesseract Worker, WASM & Language Data (Strict CSP / Offline)
+### 6. Self-Hosting Tesseract Worker, WASM & Language Data (Strict CSP / Offline)
 
 ```ts
 import { DocumentScanner } from 'docscan-ocr';
@@ -237,16 +267,18 @@ const scanner = new DocumentScanner({
 });
 ```
 
-### 6. Standalone Pure Helpers (No OCR Worker Needed)
+### 7. Standalone Pure Helpers (No OCR Worker Needed)
 
 ```ts
 import {
   analyzeDocumentOrientation,
   assessImageQuality,
   detectDocumentQuad,
+  inferNativeVizLanguageFromText,
   mergeDocumentSides,
   parseMrzFromText,
   parseVizText,
+  resolveNativeVizLanguage,
 } from 'docscan-ocr';
 ```
 
@@ -258,8 +290,8 @@ import {
 | --- | --- |
 | `public/lib/docscan-ocr.latest.umd.js` | Always-latest browser UMD bundle (exposes global `window.DocScanOCR`) |
 | `public/lib/docscan-ocr.latest.es.js` | Always-latest browser native ES module bundle |
-| `public/lib/docscan-ocr.v0.0.3.umd.js` | Version-pinned (`v0.0.3`) UMD bundle |
-| `public/lib/docscan-ocr.v0.0.3.es.js` | Version-pinned (`v0.0.3`) ES module bundle |
+| `public/lib/docscan-ocr.v0.0.4.umd.js` | Version-pinned (`v0.0.4`) UMD bundle |
+| `public/lib/docscan-ocr.v0.0.4.es.js` | Version-pinned (`v0.0.4`) ES module bundle |
 | `public/lib/types/index.d.ts` | TypeScript declaration files for all exports |
 
 ---
@@ -267,10 +299,10 @@ import {
 ## Development & Build Scripts
 
 ```bash
-npm install      # Install dependencies
-npm run dev      # Run interactive demo workbench (port 3000)
-npm run lint     # Type-check with TypeScript
-npm run build    # Build demo web application (dist/)
+npm install       # Install dependencies
+npm run dev       # Run interactive demo workbench (port 3000)
+npm run lint      # Type-check with TypeScript
+npm run build     # Build demo web application (dist/)
 npm run build:lib # Rebuild latest + versioned ESM/UMD bundles & .d.ts types (public/lib/)
 ```
 
@@ -278,11 +310,12 @@ npm run build:lib # Rebuild latest + versioned ESM/UMD bundles & .d.ts types (pu
 
 ```text
 ├── public/
-│   └── lib/                     # Ready-compiled latest & v0.0.3 UMD/ESM bundles & .d.ts types
+│   └── lib/                     # Ready-compiled latest & v0.0.4 UMD/ESM bundles & .d.ts types
 ├── src/
 │   ├── scanner/                 # Framework-agnostic OCR & parser SDK
 │   │   ├── index.ts             # Public library entry point
-│   │   ├── version.ts           # SCANNER_VERSION ('0.0.3')
+│   │   ├── version.ts           # SCANNER_VERSION ('0.0.4')
+│   │   ├── vizLanguages.ts      # Country-routed native VIZ language resolver & overrides
 │   │   ├── qualityGate.ts       # CameraAutoCapture & sharpness/glare/exposure quality gate
 │   │   ├── ocrEngine.ts         # DocumentScanner class, OCR-B MRZ + VIZ workers & scanPair()
 │   │   ├── perspective.ts       # 4-corner quad detection & 3x3 homography perspective warp
@@ -290,7 +323,7 @@ npm run build:lib # Rebuild latest + versioned ESM/UMD bundles & .d.ts types (pu
 │   │   ├── orientation.ts       # Fine deskew & 4-way orientation analyzer
 │   │   ├── imagePreprocessor.ts # Canvas scaling, rotation & MRZ contrast enhancement
 │   │   ├── mrzParser.ts         # ICAO 9303 MRZ parser & Modulo-10 check digits
-│   │   ├── vizParser.ts         # Multilingual Visual Inspection Zone extractor
+│   │   ├── vizParser.ts         # Multilingual pan-European Visual Inspection Zone extractor
 │   │   ├── countries.ts         # ISO 3166-1 alpha-3 & ICAO issuing state codes
 │   │   └── types.ts             # TypeScript interfaces
 │   ├── components/              # React workbench UI components

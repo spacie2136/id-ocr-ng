@@ -20,9 +20,10 @@ const UMD_SNIPPET = `<!-- Always use the latest build via GitHub + jsDelivr (or 
       const identity = await scanner.scan(capturedFile, {
         perspectiveCorrection: true,
         autoRotate: true,
-        mrzModel: 'ocrb',
+        mrzModel: 'ocrb',        // default OCR-B MRZ traineddata
+        vizLanguageMode: 'auto', // default: routes non-English docs to native scripts (eng+deu, eng+spa, etc.)
       });
-      console.log(identity);
+      console.log(identity.fullName, 'VIZ lang used:', identity.vizLanguage);
     },
   });
 </script>`;
@@ -42,17 +43,20 @@ const ESM_REMOTE_SNIPPET = `<script type="module">
   }
 
   const scanner = new DocumentScanner({
-    mrzModel: 'ocrb', // default ('standard' switches MRZ back to eng)
+    mrzModel: 'ocrb',         // default ('standard' switches MRZ back to eng)
+    vizLanguageMode: 'auto',  // default ('multilingual' bundles eng+deu+spa+fra; 'standard' uses eng only)
+    vizLanguageMap: { POL: 'pol' }, // optional custom issuing-state -> traineddata override
   });
 
-  // Optionally reject blurry/glare photos automatically before OCR
+  // Or override explicitly per scan:
+  // await scanner.scan(file, { vizLanguages: 'eng+deu' });
   const merged = await scanDocumentPair(frontFile, backFile, {
     enforceQualityGate: false,
     perspectiveCorrection: true,
     autoRotate: true,
   });
 
-  console.log(\`v\${SCANNER_VERSION}\`, merged);
+  console.log(\`v\${SCANNER_VERSION}\`, merged.vizLanguage, merged);
 </script>`;
 
 const SOURCE_SNIPPET = `import {
@@ -62,7 +66,10 @@ const SOURCE_SNIPPET = `import {
   mergeDocumentSides,
 } from './scanner';
 
-const scanner = new DocumentScanner({ mrzModel: 'ocrb' });
+const scanner = new DocumentScanner({
+  mrzModel: 'ocrb',
+  vizLanguageMode: 'auto', // country-routed native diacritic pass (e.g. eng+deu, eng+spa, eng+lit)
+});
 
 // 1. Live <video> auto-capture controller
 const controller = new CameraAutoCapture(videoEl, {
@@ -72,14 +79,20 @@ const controller = new CameraAutoCapture(videoEl, {
   onQualityUpdate: (report, progress) => updateHud(report, progress),
   onAutoCapture: async (file) => {
     const res = await scanner.scan(file);
-    console.log(res.fullName, res.quality);
+    console.log(res.fullName, res.vizLanguage, res.quality);
   },
 });
 controller.start();
 
-// 2. Or enforce quality gate on file uploads before burning OCR cycles
-const checked = await scanner.scan(uploadedFile, {
-  enforceQualityGate: true, // throws QualityGateError if blurry, dark, or glared
+// 2. Or override VIZ language mode explicitly
+const multiPass = await scanner.scan(uploadedFile, {
+  vizLanguageMode: 'multilingual', // single-pass 'eng+deu+spa+fra'
+});
+const standardOnly = await scanner.scan(uploadedFile, {
+  vizLanguageMode: 'standard',     // single-language 'eng'
+});
+const forced = await scanner.scan(uploadedFile, {
+  vizLanguages: 'eng+ces',         // explicit Tesseract traineddata override
 });`;
 
 const MODULES = [
@@ -88,8 +101,8 @@ const MODULES = [
     role: 'Sharpness/Laplacian focus scoring, glare hotspot & exposure checks, frame-to-frame steadiness, and CameraAutoCapture / watchCameraAutoCapture controller.',
   },
   {
-    name: 'ocrEngine.ts',
-    role: 'Dual-worker Tesseract.js orchestration (dedicated ocrb_int MRZ worker + eng VIZ worker), optional enforceQualityGate pre-check, perspective/orientation probing, and scanPair().',
+    name: 'ocrEngine.ts & vizLanguages.ts',
+    role: 'Multi-worker Tesseract.js orchestration (dedicated ocrb_int MRZ worker, primary VIZ worker, and country-routed native VIZ worker), enforceQualityGate pre-check, perspective/orientation probing, and scanPair().',
   },
   {
     name: 'perspective.ts',
@@ -109,7 +122,7 @@ const MODULES = [
   },
   {
     name: 'mrzParser.ts & vizParser.ts',
-    role: 'Pure TypeScript ICAO 9303 MRZ parser (TD1/TD2/TD3/MRV) + multilingual Visual Inspection Zone extractor.',
+    role: 'Pure TypeScript ICAO 9303 MRZ parser (TD1/TD2/TD3/MRV) + multilingual pan-European Visual Inspection Zone extractor.',
   },
   {
     name: 'countries.ts, version.ts & types.ts',
@@ -261,7 +274,7 @@ export const IntegrationGuide: React.FC = () => {
             <div className="flex items-center gap-2">
               <Globe className="w-4 h-4 text-blue-600" />
               <h3 className="text-sm font-semibold text-slate-900">
-                02. Remote ES Module, Quality Gate &amp; Pair Scan
+                02. Remote ES Module, Multilingual VIZ &amp; Pair Scan
               </h3>
             </div>
             <button
@@ -292,7 +305,7 @@ export const IntegrationGuide: React.FC = () => {
             <div className="flex items-center gap-2">
               <Terminal className="w-4 h-4 text-blue-600" />
               <h3 className="text-sm font-semibold text-slate-900">
-                03. CameraAutoCapture Class &amp; QualityGateError Enforcement
+                03. VIZ Language Routing, Multi-Script &amp; Overrides
               </h3>
             </div>
             <button

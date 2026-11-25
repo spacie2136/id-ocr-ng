@@ -3,6 +3,10 @@ export declare class DocumentScanner {
     private worker;
     private workerLang;
     private workerConfigKey;
+    private vizNativeWorker;
+    private vizNativeLang;
+    private vizNativeConfigKey;
+    private vizNativeFailedLangs;
     private mrzWorker;
     private mrzWorkerConfigKey;
     private mrzOcrbFailed;
@@ -13,6 +17,7 @@ export declare class DocumentScanner {
     private mergeWorkerConfig;
     private createLoggerOption;
     private ensureWorker;
+    private ensureNativeVizWorker;
     private ensureMrzWorker;
     private runOrientationPass;
     private runLightweightProbe;
