@@ -2,8 +2,8 @@ import React, { useState } from 'react';
 import { Check, Copy, FolderTree, Globe, Package, Terminal } from 'lucide-react';
 import { SCANNER_VERSION } from '../scanner';
 
-const UMD_SNIPPET = `<!-- 1. Load the ready-compiled UMD bundle on any remote website -->
-<script src="https://your-cdn.example/lib/docscan-ocr.v${SCANNER_VERSION}.umd.js"></script>
+const UMD_SNIPPET = `<!-- Always use the latest build via GitHub + jsDelivr (or pin @v${SCANNER_VERSION}/.../docscan-ocr.v${SCANNER_VERSION}.umd.js) -->
+<script src="https://cdn.jsdelivr.net/gh/<USERNAME>/<REPO>@main/public/lib/docscan-ocr.latest.umd.js"></script>
 <script>
   const { DocumentScanner, SCANNER_VERSION } = window.DocScanOCR;
   console.log('Loaded DocScan OCR v' + SCANNER_VERSION);
@@ -32,7 +32,7 @@ const ESM_REMOTE_SNIPPET = `<script type="module">
     DocumentScanner,
     scanDocumentImage,
     SCANNER_VERSION,
-  } from 'https://your-cdn.example/lib/docscan-ocr.v${SCANNER_VERSION}.es.js';
+  } from 'https://cdn.jsdelivr.net/gh/<USERNAME>/<REPO>@main/public/lib/docscan-ocr.latest.es.js';
 
   // Optional: point Tesseract assets to your own origin for strict CSP / offline hosting
   const scanner = new DocumentScanner({
@@ -102,12 +102,20 @@ const MODULES = [
 
 const ARTIFACTS = [
   {
+    path: '/lib/docscan-ocr.latest.umd.js',
+    desc: 'Always-latest UMD script (exposes window.DocScanOCR) so remote apps update automatically.',
+  },
+  {
+    path: '/lib/docscan-ocr.latest.es.js',
+    desc: 'Always-latest native ES module bundle for remote imports and modern browsers.',
+  },
+  {
     path: `/lib/docscan-ocr.v${SCANNER_VERSION}.umd.js`,
-    desc: 'Ready-compiled UMD script (exposes window.DocScanOCR) for any remote HTML page.',
+    desc: `Version-pinned UMD bundle for v${SCANNER_VERSION}.`,
   },
   {
     path: `/lib/docscan-ocr.v${SCANNER_VERSION}.es.js`,
-    desc: 'Ready-compiled native ES module bundle for modern browsers & bundlers.',
+    desc: `Version-pinned ES module bundle for v${SCANNER_VERSION}.`,
   },
   {
     path: '/lib/types/index.d.ts',
@@ -141,7 +149,7 @@ export const IntegrationGuide: React.FC = () => {
               </h2>
             </div>
             <span className="font-mono text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded">
-              v{SCANNER_VERSION}
+              v{SCANNER_VERSION} / latest
             </span>
           </div>
           <p className="text-xs text-slate-600 leading-relaxed mb-4">
@@ -207,7 +215,7 @@ export const IntegrationGuide: React.FC = () => {
             <div className="flex items-center gap-2">
               <Globe className="w-4 h-4 text-blue-600" />
               <h3 className="text-sm font-semibold text-slate-900">
-                01. Remote Website &lt;script&gt; Embed (UMD v{SCANNER_VERSION})
+                01. Remote Website &lt;script&gt; Embed (UMD latest / v{SCANNER_VERSION})
               </h3>
             </div>
             <button

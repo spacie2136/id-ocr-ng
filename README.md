@@ -8,7 +8,71 @@ Client-side browser OCR and identity document parser for **passports, national I
 - **Visual Inspection Zone (VIZ) Extraction**: Multilingual field extraction for names (including compound/double surnames), dates, residential addresses, place of birth, issuing authority, sex, height, eye color, and driver license categories.
 - **Auto-Rotate & Deskew**: Pure-JS fine tilt estimation (`±45°`) + 4-way orientation detection (`0°`, `90°`, `180°`, `270°`) with upright OCR verification.
 - **Dual-Pass Image Preprocessing**: Adaptive contrast stretching, flat-field lighting normalization, and dedicated MRZ strip isolation.
-- **Framework-Agnostic SDK (`src/scanner/`)**: Zero React or UI dependencies; ships with ready-compiled ESM & UMD browser bundles and TypeScript `.d.ts` declarations in `public/lib/`.
+- **Framework-Agnostic SDK (`src/scanner/`)**: Zero React or UI dependencies; ships with ready-compiled `latest` and version-pinned (`v0.0.1`) ESM & UMD browser bundles plus TypeScript `.d.ts` declarations in `public/lib/`.
+
+---
+
+## Using jsDelivr Directly From GitHub (`latest` or Pinned Version)
+
+Once `public/lib/` is pushed to your public GitHub repository, remote websites can load either the **always-latest** bundle (`docscan-ocr.latest.*`) or a **version-pinned** bundle (`docscan-ocr.v0.0.1.*`) directly through jsDelivr.
+
+### Option A: Classic `<script>` Tag (UMD Bundle)
+
+Always load the latest build from your `main` branch:
+
+```html
+<script src="https://cdn.jsdelivr.net/gh/<USERNAME>/<REPO>@main/public/lib/docscan-ocr.latest.umd.js"></script>
+<script>
+  const { DocumentScanner, SCANNER_VERSION } = window.DocScanOCR;
+  console.log('DocScan OCR v' + SCANNER_VERSION);
+
+  const scanner = new DocumentScanner();
+
+  document.getElementById('doc-file').addEventListener('change', async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const identity = await scanner.scan(file, {
+      autoRotate: true,
+      onProgress: ({ stage, progress, message }) => {
+        console.log(`[${stage}] ${progress}% - ${message}`);
+      },
+    });
+
+    console.log(identity);
+  });
+</script>
+```
+
+Or pin a specific Git tag/version for immutable production caching:
+
+```html
+<script src="https://cdn.jsdelivr.net/gh/<USERNAME>/<REPO>@v0.0.1/public/lib/docscan-ocr.v0.0.1.umd.js"></script>
+```
+
+### Option B: Native Browser ES Module (`<script type="module">`)
+
+```html
+<script type="module">
+  import {
+    DocumentScanner,
+    scanDocumentImage,
+    SCANNER_VERSION,
+  } from 'https://cdn.jsdelivr.net/gh/<USERNAME>/<REPO>@main/public/lib/docscan-ocr.latest.es.js';
+
+  // One-shot helper (automatically creates & terminates the OCR worker)
+  const identity = await scanDocumentImage(fileOrDataUrl, {
+    autoRotate: true,
+    includePreviews: false,
+  });
+
+  console.log(`v${SCANNER_VERSION}`, identity);
+</script>
+```
+
+> **jsDelivr Caching Note:** Branch URLs like `@main` are cached by jsDelivr for several hours after a push. To refresh remote apps immediately after pushing a new `docscan-ocr.latest.*` build to `main`, trigger a purge request:
+> `https://purge.jsdelivr.net/gh/<USERNAME>/<REPO>@main/public/lib/docscan-ocr.latest.umd.js`
+> (and `.es.js`). If you prefer `@latest` as the Git ref in the URL (`@latest/public/lib/docscan-ocr.latest.umd.js`), push/move a Git tag named `latest` alongside each release.
 
 ---
 
@@ -17,15 +81,15 @@ Client-side browser OCR and identity document parser for **passports, national I
 **Yes — with an important distinction:**
 
 1. **Directly from GitHub or a local folder (works right now):**
-   `package.json` defines `main`, `module`, `types`, and `exports` pointing to the pre-compiled bundles in `public/lib/` (and `./source` pointing to `src/scanner/index.ts`), so `npm` can install this repository directly without running a build step on install.
+   `package.json` defines `main`, `module`, `types`, and `exports` pointing to `public/lib/docscan-ocr.latest.*` (and `./source` pointing to `src/scanner/index.ts`), so `npm` can install this repository directly without running a build step on install.
    - **Caveat:** Because this repository also hosts the interactive React workbench app, installing the root repository via `npm install github:...` will also install the demo app's `dependencies` (such as `react`, `vite`, `express`, etc.), and `"private": true` is set so it is not published on `npmjs.com`.
 2. **Publishing a clean standalone package to npm (optional):**
-   If you want a minimal `npm install docscan-ocr` package with zero demo-app dependencies, copy `public/lib/` (or `src/scanner/`), create a dedicated `package.json` containing only `tesseract.js` (or zero runtime dependencies if shipping the pre-bundled `public/lib/docscan-ocr.v0.0.1.*.js` files), remove `"private": true`, and run `npm publish`.
+   If you want a minimal `npm install docscan-ocr` package with zero demo-app dependencies, copy `public/lib/` (or `src/scanner/`), create a dedicated `package.json` containing only `tesseract.js` (or zero runtime dependencies if shipping the pre-bundled `public/lib/docscan-ocr.latest.*.js` files), remove `"private": true`, and run `npm publish`.
 
 ### Install via `npm` from GitHub or Local Path
 
 ```bash
-# Install directly from your GitHub repository
+# Install the latest commit on main directly from GitHub
 npm install github:<your-username>/<your-repo>
 
 # Or pin a release tag / commit
@@ -59,62 +123,7 @@ await scanner.terminate();
 
 ## Other Integration Methods
 
-### 1. Remote Website `<script>` Tag (Ready-Compiled UMD Bundle)
-
-No build tools or `npm` required. Host `public/lib/docscan-ocr.v0.0.1.umd.js` on your web server or load it via jsDelivr directly from GitHub:
-
-```html
-<!-- Self-hosted -->
-<script src="https://your-cdn.example/lib/docscan-ocr.v0.0.1.umd.js"></script>
-
-<!-- Or via jsDelivr from your GitHub repo/tag -->
-<!-- <script src="https://cdn.jsdelivr.net/gh/<your-username>/<your-repo>@v0.0.1/public/lib/docscan-ocr.v0.0.1.umd.js"></script> -->
-
-<script>
-  const { DocumentScanner, SCANNER_VERSION } = window.DocScanOCR;
-  console.log('DocScan OCR v' + SCANNER_VERSION);
-
-  const scanner = new DocumentScanner();
-
-  document.getElementById('doc-file').addEventListener('change', async (event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    const identity = await scanner.scan(file, {
-      autoRotate: true,
-      onProgress: ({ stage, progress, message }) => {
-        console.log(`[${stage}] ${progress}% - ${message}`);
-      },
-    });
-
-    console.log(identity);
-  });
-</script>
-```
-
-### 2. Native Browser ES Module (`<script type="module">`)
-
-Import the ready-compiled ES module (`public/lib/docscan-ocr.v0.0.1.es.js`) directly in modern browsers:
-
-```html
-<script type="module">
-  import {
-    DocumentScanner,
-    scanDocumentImage,
-    SCANNER_VERSION,
-  } from 'https://your-cdn.example/lib/docscan-ocr.v0.0.1.es.js';
-
-  // One-shot helper (automatically creates & terminates the OCR worker)
-  const identity = await scanDocumentImage(fileOrDataUrl, {
-    autoRotate: true,
-    includePreviews: false,
-  });
-
-  console.log(`v${SCANNER_VERSION}`, identity);
-</script>
-```
-
-### 3. Copy the Standalone Source Folder (`src/scanner/`)
+### 1. Copy the Standalone Source Folder (`src/scanner/`)
 
 If you want full source control without installing the whole repository:
 
@@ -130,7 +139,7 @@ If you want full source control without installing the whole repository:
 
 `src/scanner/` has zero React, Vite, or backend dependencies—it relies solely on browser DOM (`Canvas` / `Image`) APIs and `tesseract.js`.
 
-### 4. Self-Hosting Tesseract Worker, WASM & Language Data (Strict CSP / Offline)
+### 2. Self-Hosting Tesseract Worker, WASM & Language Data (Strict CSP / Offline)
 
 By default, `tesseract.js` fetches its worker script, WASM core, and `eng.traineddata` from CDN at runtime. For strict Content Security Policy (CSP) or air-gapped environments, pass custom paths when constructing `DocumentScanner` or calling `scanDocumentImage`:
 
@@ -145,7 +154,7 @@ const scanner = new DocumentScanner({
 });
 ```
 
-### 5. Standalone Pure Helpers (No OCR Worker Needed)
+### 3. Standalone Pure Helpers (No OCR Worker Needed)
 
 You can also use the pure MRZ, VIZ, and orientation utilities independently with text from any OCR source or image element:
 
@@ -167,8 +176,10 @@ const viz = parseVizText(rawOcrText);
 
 | File | Purpose |
 | --- | --- |
-| `public/lib/docscan-ocr.v0.0.1.umd.js` | Browser UMD bundle (exposes global `window.DocScanOCR`) |
-| `public/lib/docscan-ocr.v0.0.1.es.js` | Browser native ES module bundle |
+| `public/lib/docscan-ocr.latest.umd.js` | Always-latest browser UMD bundle (exposes global `window.DocScanOCR`) |
+| `public/lib/docscan-ocr.latest.es.js` | Always-latest browser native ES module bundle |
+| `public/lib/docscan-ocr.v0.0.1.umd.js` | Version-pinned (`v0.0.1`) UMD bundle |
+| `public/lib/docscan-ocr.v0.0.1.es.js` | Version-pinned (`v0.0.1`) ES module bundle |
 | `public/lib/types/index.d.ts` | TypeScript declaration files for all exports |
 
 ---
@@ -188,7 +199,7 @@ npm run lint
 # Build the demo web application (outputs to dist/)
 npm run build
 
-# Rebuild the standalone v0.0.1 ESM/UMD library + .d.ts types (outputs to public/lib/)
+# Rebuild both versioned (vX.Y.Z) and latest ESM/UMD bundles + .d.ts types (outputs to public/lib/)
 npm run build:lib
 ```
 
@@ -196,7 +207,7 @@ npm run build:lib
 
 ```text
 ├── public/
-│   └── lib/                     # Ready-compiled v0.0.1 UMD/ESM bundles & .d.ts types
+│   └── lib/                     # Ready-compiled latest & v0.0.1 UMD/ESM bundles & .d.ts types
 ├── src/
 │   ├── scanner/                 # Framework-agnostic OCR & parser SDK
 │   │   ├── index.ts             # Public library entry point

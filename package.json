@@ -3,15 +3,15 @@
   "private": true,
   "version": "0.0.1",
   "type": "module",
-  "main": "./public/lib/docscan-ocr.v0.0.1.umd.js",
-  "module": "./public/lib/docscan-ocr.v0.0.1.es.js",
+  "main": "./public/lib/docscan-ocr.latest.umd.js",
+  "module": "./public/lib/docscan-ocr.latest.es.js",
   "types": "./public/lib/types/index.d.ts",
   "exports": {
     ".": {
       "types": "./public/lib/types/index.d.ts",
-      "import": "./public/lib/docscan-ocr.v0.0.1.es.js",
-      "require": "./public/lib/docscan-ocr.v0.0.1.umd.js",
-      "default": "./public/lib/docscan-ocr.v0.0.1.es.js"
+      "import": "./public/lib/docscan-ocr.latest.es.js",
+      "require": "./public/lib/docscan-ocr.latest.umd.js",
+      "default": "./public/lib/docscan-ocr.latest.es.js"
     },
     "./source": "./src/scanner/index.ts"
   },
