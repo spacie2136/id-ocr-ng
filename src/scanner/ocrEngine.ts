@@ -7,14 +7,23 @@ import {
 } from './imagePreprocessor';
 import { parseMrzFromText } from './mrzParser';
 import { analyzeDocumentOrientation } from './orientation';
+import { mergeDocumentSides } from './pairMerger';
+import {
+  detectDocumentQuad,
+  orderQuadCorners,
+  warpDocumentPerspective,
+} from './perspective';
 import type {
   DocumentType,
   ExtractedIdentity,
   FieldSource,
   GrayscaleBuffer,
   ImageInput,
+  MergedDocumentResult,
   MrzParsedData,
   OrientationInfo,
+  PairScanOptions,
+  PerspectiveInfo,
   PreprocessedResult,
   ScanProgress,
   ScannerOptions,
@@ -112,8 +121,6 @@ function reconcileDocumentNumber(
     const docCheck = mrz.checkDigits.find((c) => c.field === 'documentNumber');
     const mrzNorm = mrz.documentNumber.trim().toUpperCase();
     const vizNorm = vizDocNum.trim().toUpperCase();
-    // If MRZ document check digit failed (e.g. specimen mismatch or B/8, 0/O ambiguity)
-    // and VIZ matches length & confusable skeleton, prefer the crisp VIZ reading
     if (
       docCheck &&
       !docCheck.valid &&
@@ -127,11 +134,6 @@ function reconcileDocumentNumber(
   return pickField(mrz?.documentNumber, vizDocNum, 'documentNumber', sources);
 }
 
-/**
- * Extracts spatial VIZ line boxes from Tesseract blocks while stitching
- * tiny intra-word gaps caused by card watermarks (e.g. "MUND INGEN" -> "MUNDINGEN")
- * and horizontally split DD.MM + YYYY date fragments on the same row.
- */
 function extractVizLineBoxes(blocks: Block[] | null): VizLineBox[] {
   if (!blocks) return [];
   const boxes: VizLineBox[] = [];
@@ -154,7 +156,6 @@ function extractVizLineBoxes(blocks: Block[] | null): VizLineBox[] {
               const avgCharW = (prevCharW + currCharW) / 2;
               const bothAlphaUpper =
                 /^[A-ZÄÖÜÑ]{2,}$/.test(prevText) && /^[A-ZÄÖÜÑ]{2,}$/.test(wText);
-              // Join split word fragments when gap is smaller than an actual word space (~1.02 char width)
               if (bothAlphaUpper && gap < avgCharW * 1.02) {
                 text += wText;
               } else {
@@ -184,7 +185,6 @@ function extractVizLineBoxes(blocks: Block[] | null): VizLineBox[] {
     }
   }
 
-  // Rejoin split DD.MM + YYYY date fragments placed in adjacent paragraphs on the same row
   boxes.sort((a, b) => a.bbox.y0 - b.bbox.y0 || a.bbox.x0 - b.bbox.x0);
   const merged: VizLineBox[] = [];
   for (let i = 0; i < boxes.length; i++) {
@@ -308,13 +308,10 @@ function inspectInkBox(
     d(2, 2) >= 0.28;
 
   const hasCenterStem = d(0, 1) >= 0.35 && d(1, 1) >= 0.5 && d(2, 1) >= 0.35;
-  // OCR-B '1' has a left-pointing top serif that shifts the vertical stem into col 2
   const hasRightStem =
     d(0, 2) >= 0.55 && d(1, 2) >= 0.65 && d(2, 2) >= 0.55 && d(1, 0) <= 0.15 && d(2, 0) <= 0.15;
   const isThinBar = gw <= gh * 0.48 && (hasCenterStem || hasRightStem);
 
-  // '9' has a wide closed top loop (hollow center) + open lower corners + bottom-center tail,
-  // distinguishing it cleanly from narrow solid-stem 'I' or '1'.
   const isNine =
     gw >= gh * 0.54 &&
     d(1, 1) <= 0.5 &&
@@ -325,7 +322,6 @@ function inspectInkBox(
     d(2, 2) <= 0.25 &&
     d(2, 1) >= 0.4;
 
-  // 'Z' has full top and bottom horizontal bars + diagonal center, with open mid-left and mid-right
   const isZee =
     gw >= gh * 0.48 &&
     d(0, 1) >= 0.38 &&
@@ -347,8 +343,6 @@ function findInkHorizontalBounds(
   x1: number,
   y1: number
 ): { inkX0: number; inkX1: number } {
-  // Stay strictly inside Tesseract's line bbox and require >=2 vertical ink pixels
-  // per column so stray 1px background dots never shift the 44-col MRZ pitch.
   const bx0 = Math.max(0, Math.floor(x0));
   const bx1 = Math.min(gray.width - 1, Math.ceil(x1));
   const by0 = Math.max(0, Math.floor(y0));
@@ -426,8 +420,6 @@ function reconstructMrzCandidatesFromBlocks(
         const mergedW = n.bbox.x1 - s.bbox.x0;
         const overlaps = n.bbox.x0 <= s.bbox.x1 + 2;
 
-        // If Tesseract emits a phantom overlapping symbol (e.g. K) on a chevron glyph,
-        // collapse the entire overlapping span to a single '<'
         if (overlaps && mergedW <= medW * 1.75) {
           const nextSingle = inspectInkBox(gray, n.bbox.x0, n.bbox.y0, n.bbox.x1, n.bbox.y1);
           if (single.isChevron || nextSingle.isChevron) {
@@ -506,8 +498,6 @@ function reconstructMrzCandidatesFromBlocks(
       const activeSyms =
         targetCols === 30 && mrzBlock.length === 3 ? mrzSymLines : mrzSymLines.slice(-2);
 
-      // Some synthetic specimens print 45 glyphs per TD3 line instead of 44;
-      // align to 45 columns when both lines already show 45 repaired symbols.
       if (targetCols === 44 && activeSyms.length === 2 && activeSyms.every((s) => s.length === 45)) {
         targetCols = 45;
       }
@@ -533,7 +523,6 @@ function reconstructMrzCandidatesFromBlocks(
         let reconstructed = '';
         for (let col = 0; col < targetCols; col++) {
           const mid = center0 + col * pitch;
-          // 0.36 pitch half-width isolates each glyph cell without bleeding into neighboring glyphs
           const cx0 = mid - pitch * 0.36;
           const cx1 = mid + pitch * 0.36;
           const cellBox = inspectInkBox(gray, cx0, line.bbox.y0, cx1, line.bbox.y1);
@@ -677,6 +666,22 @@ function normalizeDegrees360(deg: number): number {
   return Math.round(norm * 10) / 10;
 }
 
+function scaleProgressCallback(
+  base: number,
+  span: number,
+  cb?: (p: ScanProgress) => void,
+  labelPrefix?: string
+): ((p: ScanProgress) => void) | undefined {
+  if (!cb) return undefined;
+  return (p: ScanProgress) => {
+    cb({
+      stage: p.stage,
+      progress: Math.min(99, Math.round(base + (p.progress / 100) * span)),
+      message: labelPrefix ? `${labelPrefix}: ${p.message}` : p.message,
+    });
+  };
+}
+
 export class DocumentScanner {
   private worker: Worker | null = null;
   private workerLang: string | null = null;
@@ -767,7 +772,7 @@ export class DocumentScanner {
   }
 
   private async runOrientationPass(
-    img: HTMLImageElement,
+    surface: HTMLImageElement | HTMLCanvasElement,
     worker: Worker,
     coarse: 0 | 90 | 180 | 270,
     deskewDegrees: number,
@@ -776,7 +781,7 @@ export class DocumentScanner {
     onProgress?: (p: ScanProgress) => void,
     emitProgress = true
   ): Promise<OrientationPassResult> {
-    const preprocessed = await preprocessDocumentImage(img, {
+    const preprocessed = await preprocessDocumentImage(surface, {
       preprocess,
       rotation: coarse,
       deskewDegrees,
@@ -917,13 +922,13 @@ export class DocumentScanner {
   }
 
   private async runLightweightProbe(
-    img: HTMLImageElement,
+    surface: HTMLImageElement | HTMLCanvasElement,
     worker: Worker,
     coarse: 0 | 90 | 180 | 270,
     deskewDegrees: number,
     preprocess: boolean
   ): Promise<number> {
-    const preprocessed = await preprocessDocumentImage(img, {
+    const preprocessed = await preprocessDocumentImage(surface, {
       preprocess,
       rotation: coarse,
       deskewDegrees,
@@ -952,6 +957,8 @@ export class DocumentScanner {
       language = 'eng',
       preprocess = true,
       enhanceMrzPass = true,
+      perspectiveCorrection = true,
+      corners: manualCorners,
       rotation = 0,
       deskewDegrees: manualDeskew = 0,
       includePreviews = true,
@@ -962,7 +969,6 @@ export class DocumentScanner {
       onProgress,
     } = options;
 
-    // Default autoRotate to true unless caller explicitly disabled it or passed a non-zero manual rotation
     const autoRotate =
       options.autoRotate !== undefined
         ? options.autoRotate
@@ -970,13 +976,69 @@ export class DocumentScanner {
 
     onProgress?.({
       stage: 'preprocessing',
-      progress: 5,
-      message: autoRotate
-        ? 'Decoding document & analyzing orientation…'
-        : 'Preprocessing image & isolating MRZ region…',
+      progress: 4,
+      message: perspectiveCorrection || manualCorners
+        ? 'Decoding document & checking 4-corner perspective…'
+        : autoRotate
+          ? 'Decoding document & analyzing orientation…'
+          : 'Preprocessing image & isolating MRZ region…',
     });
 
-    const img = await loadImageElement(input);
+    const rawImg = await loadImageElement(input);
+    let workingSurface: HTMLImageElement | HTMLCanvasElement = rawImg;
+    let perspectiveInfo: PerspectiveInfo | undefined;
+
+    if (manualCorners) {
+      onProgress?.({
+        stage: 'detecting_perspective',
+        progress: 9,
+        message: 'Applying 4-corner perspective rectification…',
+      });
+      const ordered = orderQuadCorners([
+        manualCorners.topLeft,
+        manualCorners.topRight,
+        manualCorners.bottomRight,
+        manualCorners.bottomLeft,
+      ]);
+      workingSurface = warpDocumentPerspective(rawImg, ordered);
+      const area =
+        Math.abs(
+          (ordered.topLeft.x * ordered.topRight.y - ordered.topRight.x * ordered.topLeft.y) +
+            (ordered.topRight.x * ordered.bottomRight.y - ordered.bottomRight.x * ordered.topRight.y) +
+            (ordered.bottomRight.x * ordered.bottomLeft.y - ordered.bottomLeft.x * ordered.bottomRight.y) +
+            (ordered.bottomLeft.x * ordered.topLeft.y - ordered.topLeft.x * ordered.bottomLeft.y)
+        ) / 2;
+      perspectiveInfo = {
+        applied: true,
+        autoDetected: false,
+        corners: ordered,
+        sourceQuadAreaRatio: Math.round(area * 1000) / 1000,
+      };
+    } else if (perspectiveCorrection) {
+      onProgress?.({
+        stage: 'detecting_perspective',
+        progress: 9,
+        message: 'Detecting document borders for perspective correction…',
+      });
+      const detected = detectDocumentQuad(rawImg);
+      if (detected) {
+        workingSurface = warpDocumentPerspective(rawImg, detected.corners);
+        perspectiveInfo = detected;
+      } else {
+        perspectiveInfo = {
+          applied: false,
+          autoDetected: true,
+          corners: {
+            topLeft: { x: 0, y: 0 },
+            topRight: { x: 1, y: 0 },
+            bottomRight: { x: 1, y: 1 },
+            bottomLeft: { x: 0, y: 1 },
+          },
+          sourceQuadAreaRatio: 1,
+        };
+      }
+    }
+
     const worker = await this.ensureWorker(
       language,
       { workerPath, corePath, langPath, workerBlobURL },
@@ -992,14 +1054,14 @@ export class DocumentScanner {
         progress: 16,
         message: 'Detecting document rotation & skew angle…',
       });
-      const smallGray = sampleDownscaledGrayscale(img, 400);
+      const smallGray = sampleDownscaledGrayscale(workingSurface, 400);
       const orient = analyzeDocumentOrientation(smallGray.data, smallGray.width, smallGray.height);
       deskewDegrees = orient.deskewDegrees;
       candidateOrder = orient.rankedCoarseRotations;
     }
 
     let bestPass = await this.runOrientationPass(
-      img,
+      workingSurface,
       worker,
       candidateOrder[0],
       deskewDegrees,
@@ -1010,7 +1072,6 @@ export class DocumentScanner {
     );
 
     if (autoRotate && !bestPass.isConfidentUpright) {
-      // Probe remaining candidate orientations quickly and run full extraction on the winner if different
       let bestProbeRot = bestPass.coarse;
       let bestProbeScore = bestPass.probeScore;
 
@@ -1023,7 +1084,7 @@ export class DocumentScanner {
         });
 
         const score = await this.runLightweightProbe(
-          img,
+          workingSurface,
           worker,
           rot,
           deskewDegrees,
@@ -1033,7 +1094,6 @@ export class DocumentScanner {
         if (score > bestProbeScore) {
           bestProbeScore = score;
           bestProbeRot = rot;
-          // Stop early if an orientation yields clear structured identity data
           if (score >= 240) {
             break;
           }
@@ -1042,7 +1102,7 @@ export class DocumentScanner {
 
       if (bestProbeRot !== bestPass.coarse) {
         bestPass = await this.runOrientationPass(
-          img,
+          workingSurface,
           worker,
           bestProbeRot,
           deskewDegrees,
@@ -1231,6 +1291,7 @@ export class DocumentScanner {
         height: preprocessed.height,
       },
       orientation,
+      perspective: perspectiveInfo,
       previews: includePreviews
         ? {
             originalDataUrl: preprocessed.originalDataUrl,
@@ -1239,6 +1300,47 @@ export class DocumentScanner {
           }
         : undefined,
     };
+  }
+
+  /**
+   * Scans both the front and back images of a two-sided document (ID card, residence permit,
+   * or driver license) reusing the same warm OCR worker and merges both sides into one
+   * unified ExtractedIdentity with cross-side consistency checks.
+   */
+  async scanPair(
+    front: ImageInput,
+    back: ImageInput,
+    options: PairScanOptions = {}
+  ): Promise<MergedDocumentResult> {
+    const { frontOptions, backOptions, onProgress, ...shared } = options;
+
+    const frontResult = await this.scan(front, {
+      ...shared,
+      ...frontOptions,
+      onProgress: scaleProgressCallback(0, 48, onProgress, 'Front'),
+    });
+
+    const backResult = await this.scan(back, {
+      ...shared,
+      ...backOptions,
+      onProgress: scaleProgressCallback(50, 46, onProgress, 'Back'),
+    });
+
+    onProgress?.({
+      stage: 'parsing',
+      progress: 98,
+      message: 'Merging front & back fields and verifying consistency…',
+    });
+
+    const merged = mergeDocumentSides(frontResult, backResult);
+
+    onProgress?.({
+      stage: 'complete',
+      progress: 100,
+      message: 'Two-sided scan complete',
+    });
+
+    return merged;
   }
 
   async terminate(): Promise<void> {
@@ -1263,6 +1365,24 @@ export async function scanDocumentImage(
   });
   try {
     return await scanner.scan(input, options);
+  } finally {
+    await scanner.terminate();
+  }
+}
+
+export async function scanDocumentPair(
+  front: ImageInput,
+  back: ImageInput,
+  options: PairScanOptions = {}
+): Promise<MergedDocumentResult> {
+  const scanner = new DocumentScanner({
+    workerPath: options.workerPath,
+    corePath: options.corePath,
+    langPath: options.langPath,
+    workerBlobURL: options.workerBlobURL,
+  });
+  try {
+    return await scanner.scanPair(front, back, options);
   } finally {
     await scanner.terminate();
   }

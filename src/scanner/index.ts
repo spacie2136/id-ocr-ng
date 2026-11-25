@@ -1,5 +1,11 @@
 export { SCANNER_VERSION } from './version';
-export { DocumentScanner, scanDocumentImage } from './ocrEngine';
+export { DocumentScanner, scanDocumentImage, scanDocumentPair } from './ocrEngine';
+export { mergeDocumentSides } from './pairMerger';
+export {
+  detectDocumentQuad,
+  orderQuadCorners,
+  warpDocumentPerspective,
+} from './perspective';
 export { parseMrzFromText, computeCheckDigit } from './mrzParser';
 export { parseVizText, normalizeVisualDate } from './vizParser';
 export {
@@ -11,18 +17,24 @@ export { analyzeDocumentOrientation, type OrientationAnalysis } from './orientat
 export { ICAO_COUNTRY_CODES, resolveCountryName } from './countries';
 export type {
   CheckDigitStatus,
+  DocumentQuad,
   DocumentType,
   ExtractedIdentity,
   FieldSource,
   GrayscaleBuffer,
   ImageInput,
+  MergedDocumentResult,
   MrzFormat,
   MrzParsedData,
   OrientationInfo,
+  PairScanOptions,
+  PerspectiveInfo,
+  Point2D,
   PreprocessedResult,
   ScanProgress,
   ScanStage,
   ScannerOptions,
+  SideConsistencyConflict,
   TesseractWorkerConfig,
   VizLineBox,
   VizParsedData,

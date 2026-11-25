@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Trash2 } from 'lucide-react';
-import { DocumentViewport } from './components/DocumentViewport';
+import { DocumentViewport, type ScanMode } from './components/DocumentViewport';
 import { ExtractedResultsPanel } from './components/ExtractedResultsPanel';
 import { IntegrationGuide } from './components/IntegrationGuide';
 import {
   DocumentScanner,
+  type DocumentQuad,
   type ExtractedIdentity,
+  type MergedDocumentResult,
   type ScanProgress,
 } from './scanner';
 
@@ -15,22 +17,33 @@ interface SessionScanRecord {
   id: string;
   fileName: string;
   file: File;
+  backFile?: File;
   scannedAt: string;
-  result: ExtractedIdentity;
+  result: ExtractedIdentity | MergedDocumentResult;
 }
 
 export default function App() {
   const [activeView, setActiveView] = useState<AppView>('workbench');
+  const [scanMode, setScanMode] = useState<ScanMode>('single');
+
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+
+  const [frontFile, setFrontFile] = useState<File | null>(null);
+  const [frontPreviewUrl, setFrontPreviewUrl] = useState<string | null>(null);
+  const [backFile, setBackFile] = useState<File | null>(null);
+  const [backPreviewUrl, setBackPreviewUrl] = useState<string | null>(null);
+
   const [rotation, setRotation] = useState<0 | 90 | 180 | 270>(0);
   const [autoRotate, setAutoRotate] = useState(true);
+  const [perspectiveCorrection, setPerspectiveCorrection] = useState(true);
+  const [manualCorners, setManualCorners] = useState<DocumentQuad | null>(null);
   const [preprocess, setPreprocess] = useState(true);
   const [enhanceMrzPass, setEnhanceMrzPass] = useState(true);
 
   const [isScanning, setIsScanning] = useState(false);
   const [progress, setProgress] = useState<ScanProgress | null>(null);
-  const [result, setResult] = useState<ExtractedIdentity | null>(null);
+  const [result, setResult] = useState<ExtractedIdentity | MergedDocumentResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<SessionScanRecord[]>([]);
 
@@ -50,12 +63,26 @@ export default function App() {
     };
   }, [previewUrl]);
 
+  useEffect(() => {
+    return () => {
+      if (frontPreviewUrl) URL.revokeObjectURL(frontPreviewUrl);
+    };
+  }, [frontPreviewUrl]);
+
+  useEffect(() => {
+    return () => {
+      if (backPreviewUrl) URL.revokeObjectURL(backPreviewUrl);
+    };
+  }, [backPreviewUrl]);
+
   const runScan = useCallback(
     async (
       fileToScan: File,
       opts: {
         rot: 0 | 90 | 180 | 270;
         autoRot: boolean;
+        persp: boolean;
+        corners: DocumentQuad | null;
         prep: boolean;
         mrzPass: boolean;
       }
@@ -76,6 +103,8 @@ export default function App() {
           language: 'eng',
           preprocess: opts.prep,
           enhanceMrzPass: opts.mrzPass,
+          perspectiveCorrection: opts.persp,
+          corners: opts.corners ?? undefined,
           autoRotate: opts.autoRot,
           rotation: opts.rot,
           includePreviews: true,
@@ -110,6 +139,68 @@ export default function App() {
     []
   );
 
+  const runPairScan = useCallback(
+    async (
+      fFile: File,
+      bFile: File,
+      opts: {
+        autoRot: boolean;
+        persp: boolean;
+        prep: boolean;
+        mrzPass: boolean;
+      }
+    ) => {
+      if (!scannerRef.current) {
+        scannerRef.current = new DocumentScanner();
+      }
+      setIsScanning(true);
+      setError(null);
+      setProgress({
+        stage: 'preprocessing',
+        progress: 2,
+        message: 'Scanning front & back sides…',
+      });
+
+      try {
+        const merged = await scannerRef.current.scanPair(fFile, bFile, {
+          language: 'eng',
+          preprocess: opts.prep,
+          enhanceMrzPass: opts.mrzPass,
+          perspectiveCorrection: opts.persp,
+          autoRotate: opts.autoRot,
+          includePreviews: true,
+          onProgress: (p) => setProgress(p),
+        });
+
+        setResult(merged);
+        setHistory((prev) => [
+          {
+            id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            fileName: `${fFile.name} + ${bFile.name}`,
+            file: fFile,
+            backFile: bFile,
+            scannedAt: new Date().toLocaleTimeString([], {
+              hour: '2-digit',
+              minute: '2-digit',
+              second: '2-digit',
+            }),
+            result: merged,
+          },
+          ...prev,
+        ]);
+      } catch (err) {
+        setError(
+          err instanceof Error
+            ? err.message
+            : 'An unexpected error occurred while scanning front & back sides.'
+        );
+      } finally {
+        setIsScanning(false);
+      }
+    },
+    []
+  );
+
   const handleSelectFile = (file: File) => {
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     const nextUrl = URL.createObjectURL(file);
@@ -117,12 +208,15 @@ export default function App() {
     setPreviewUrl(nextUrl);
     setRotation(0);
     setAutoRotate(true);
+    setManualCorners(null);
     setResult(null);
     setError(null);
     setActiveView('workbench');
     void runScan(file, {
       rot: 0,
       autoRot: true,
+      persp: perspectiveCorrection,
+      corners: null,
       prep: preprocess,
       mrzPass: enhanceMrzPass,
     });
@@ -133,9 +227,58 @@ export default function App() {
     setSelectedFile(null);
     setPreviewUrl(null);
     setRotation(0);
+    setManualCorners(null);
     setResult(null);
     setError(null);
     setProgress(null);
+  };
+
+  const handleSelectPairFile = (side: 'front' | 'back', file: File) => {
+    const nextUrl = URL.createObjectURL(file);
+    setResult(null);
+    setError(null);
+    setActiveView('workbench');
+
+    if (side === 'front') {
+      if (frontPreviewUrl) URL.revokeObjectURL(frontPreviewUrl);
+      setFrontFile(file);
+      setFrontPreviewUrl(nextUrl);
+      if (backFile) {
+        void runPairScan(file, backFile, {
+          autoRot: autoRotate,
+          persp: perspectiveCorrection,
+          prep: preprocess,
+          mrzPass: enhanceMrzPass,
+        });
+      }
+    } else {
+      if (backPreviewUrl) URL.revokeObjectURL(backPreviewUrl);
+      setBackFile(file);
+      setBackPreviewUrl(nextUrl);
+      if (frontFile) {
+        void runPairScan(frontFile, file, {
+          autoRot: autoRotate,
+          persp: perspectiveCorrection,
+          prep: preprocess,
+          mrzPass: enhanceMrzPass,
+        });
+      }
+    }
+  };
+
+  const handleClearPairFile = (side: 'front' | 'back') => {
+    setResult(null);
+    setError(null);
+    setProgress(null);
+    if (side === 'front') {
+      if (frontPreviewUrl) URL.revokeObjectURL(frontPreviewUrl);
+      setFrontFile(null);
+      setFrontPreviewUrl(null);
+    } else {
+      if (backPreviewUrl) URL.revokeObjectURL(backPreviewUrl);
+      setBackFile(null);
+      setBackPreviewUrl(null);
+    }
   };
 
   const handleRotate = () => {
@@ -154,10 +297,24 @@ export default function App() {
   };
 
   const handleTriggerScan = () => {
-    if (!selectedFile || isScanning) return;
+    if (isScanning) return;
+    if (scanMode === 'pair') {
+      if (!frontFile || !backFile) return;
+      void runPairScan(frontFile, backFile, {
+        autoRot: autoRotate,
+        persp: perspectiveCorrection,
+        prep: preprocess,
+        mrzPass: enhanceMrzPass,
+      });
+      return;
+    }
+
+    if (!selectedFile) return;
     void runScan(selectedFile, {
       rot: rotation,
       autoRot: autoRotate,
+      persp: perspectiveCorrection,
+      corners: manualCorners,
       prep: preprocess,
       mrzPass: enhanceMrzPass,
     });
@@ -165,7 +322,18 @@ export default function App() {
 
   const handleExportJson = () => {
     if (!result) return;
-    const payload = JSON.stringify({ ...result, previews: undefined }, null, 2);
+    const sanitized =
+      'sides' in result
+        ? {
+            ...result,
+            previews: undefined,
+            sides: {
+              front: { ...result.sides.front, previews: undefined },
+              back: { ...result.sides.back, previews: undefined },
+            },
+          }
+        : { ...result, previews: undefined };
+    const payload = JSON.stringify(sanitized, null, 2);
     const blob = new Blob([payload], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -244,6 +412,8 @@ export default function App() {
                 onClick={() => {
                   setActiveView('workbench');
                   handleClearFile();
+                  handleClearPairFile('front');
+                  handleClearPairFile('back');
                 }}
                 className="px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap shrink-0"
               >
@@ -266,10 +436,10 @@ export default function App() {
           </h1>
           <p className="text-sm text-slate-600 mt-1 max-w-3xl">
             {activeView === 'workbench'
-              ? 'Auto-straightens rotated documents and extracts Machine Readable Zone (TD1, TD2, TD3) check digits and Visual Inspection Zone personal fields client-side using Tesseract.js.'
+              ? 'Auto-rectifies 4-corner perspective, straightens rotated scans, merges front & back IDs, and extracts Machine Readable Zone check digits and Visual Inspection Zone fields client-side.'
               : activeView === 'history'
                 ? 'In-memory scans processed during this browser session. No document images or personal data leave your device.'
-                : 'Drop-in TypeScript module architecture designed to be copied straight into future web applications.'}
+                : 'Drop-in TypeScript module architecture designed to be copied or embedded via CDN straight into web applications.'}
           </p>
         </div>
 
@@ -277,19 +447,35 @@ export default function App() {
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
             <div className="lg:col-span-6 flex flex-col">
               <DocumentViewport
+                scanMode={scanMode}
                 selectedFile={selectedFile}
                 previewUrl={previewUrl}
+                frontFile={frontFile}
+                frontPreviewUrl={frontPreviewUrl}
+                backFile={backFile}
+                backPreviewUrl={backPreviewUrl}
                 result={result}
                 isScanning={isScanning}
                 progress={progress}
                 rotation={rotation}
                 autoRotate={autoRotate}
+                perspectiveCorrection={perspectiveCorrection}
+                manualCorners={manualCorners}
                 preprocess={preprocess}
                 enhanceMrzPass={enhanceMrzPass}
+                onChangeScanMode={(mode) => {
+                  setScanMode(mode);
+                  setResult(null);
+                  setError(null);
+                }}
                 onSelectFile={handleSelectFile}
                 onClearFile={handleClearFile}
+                onSelectPairFile={handleSelectPairFile}
+                onClearPairFile={handleClearPairFile}
                 onRotate={handleRotate}
                 onToggleAutoRotate={handleToggleAutoRotate}
+                onTogglePerspective={setPerspectiveCorrection}
+                onChangeManualCorners={setManualCorners}
                 onTogglePreprocess={setPreprocess}
                 onToggleMrzPass={setEnhanceMrzPass}
                 onTriggerScan={handleTriggerScan}
@@ -364,13 +550,26 @@ export default function App() {
                           <button
                             type="button"
                             onClick={() => {
-                              setSelectedFile(item.file);
-                              setRotation(0);
-                              setAutoRotate(item.result.orientation?.autoDetected ?? true);
-                              setResult(item.result);
-                              if (item.result.previews?.originalDataUrl) {
-                                setPreviewUrl(item.result.previews.originalDataUrl);
+                              if ('sides' in item.result && item.backFile) {
+                                setScanMode('pair');
+                                setFrontFile(item.file);
+                                setBackFile(item.backFile);
+                                setFrontPreviewUrl(
+                                  item.result.sides.front.previews?.originalDataUrl ?? null
+                                );
+                                setBackPreviewUrl(
+                                  item.result.sides.back.previews?.originalDataUrl ?? null
+                                );
+                              } else {
+                                setScanMode('single');
+                                setSelectedFile(item.file);
+                                setRotation(0);
+                                setAutoRotate(item.result.orientation?.autoDetected ?? true);
+                                if (item.result.previews?.originalDataUrl) {
+                                  setPreviewUrl(item.result.previews.originalDataUrl);
+                                }
                               }
+                              setResult(item.result);
                               setActiveView('workbench');
                             }}
                             className="text-xs font-medium text-blue-600 hover:text-blue-700 mr-3"

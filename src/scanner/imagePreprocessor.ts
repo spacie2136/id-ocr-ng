@@ -47,11 +47,17 @@ export function loadImageElement(input: ImageInput): Promise<HTMLImageElement> {
  * for fast client-side orientation and skew estimation.
  */
 export function sampleDownscaledGrayscale(
-  img: HTMLImageElement,
+  img: HTMLImageElement | HTMLCanvasElement,
   maxDim = 400
 ): GrayscaleBuffer {
-  const srcW = Math.max(1, img.naturalWidth || img.width);
-  const srcH = Math.max(1, img.naturalHeight || img.height);
+  const srcW = Math.max(
+    1,
+    img instanceof HTMLImageElement ? img.naturalWidth || img.width : img.width
+  );
+  const srcH = Math.max(
+    1,
+    img instanceof HTMLImageElement ? img.naturalHeight || img.height : img.height
+  );
   const scale = Math.min(1, maxDim / Math.max(srcW, srcH));
   const width = Math.max(1, Math.round(srcW * scale));
   const height = Math.max(1, Math.round(srcH * scale));
@@ -352,10 +358,13 @@ export async function preprocessDocumentImage(
   } = {}
 ): Promise<PreprocessedResult> {
   const { preprocess = true, rotation = 0, deskewDegrees = 0 } = options;
-  const img = await loadImageElement(input);
+  const surface: HTMLImageElement | HTMLCanvasElement =
+    input instanceof HTMLCanvasElement ? input : await loadImageElement(input);
 
-  const srcW = img.naturalWidth || img.width;
-  const srcH = img.naturalHeight || img.height;
+  const srcW =
+    surface instanceof HTMLImageElement ? surface.naturalWidth || surface.width : surface.width;
+  const srcH =
+    surface instanceof HTMLImageElement ? surface.naturalHeight || surface.height : surface.height;
 
   const totalDeg = rotation + deskewDegrees;
   const hasFineSkew = Math.abs(deskewDegrees) >= 0.1;
@@ -396,7 +405,7 @@ export async function preprocessDocumentImage(
   origCtx.rotate((totalDeg * Math.PI) / 180);
   const drawW = Math.round(srcW * scale);
   const drawH = Math.round(srcH * scale);
-  origCtx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
+  origCtx.drawImage(surface, -drawW / 2, -drawH / 2, drawW, drawH);
   origCtx.restore();
 
   if (hasFineSkew) {

@@ -1,4 +1,4 @@
-import type { ExtractedIdentity, ImageInput, ScannerOptions, TesseractWorkerConfig } from './types';
+import type { ExtractedIdentity, ImageInput, MergedDocumentResult, PairScanOptions, ScannerOptions, TesseractWorkerConfig } from './types';
 export declare class DocumentScanner {
     private worker;
     private workerLang;
@@ -11,6 +11,13 @@ export declare class DocumentScanner {
     private runOrientationPass;
     private runLightweightProbe;
     scan(input: ImageInput, options?: ScannerOptions): Promise<ExtractedIdentity>;
+    /**
+     * Scans both the front and back images of a two-sided document (ID card, residence permit,
+     * or driver license) reusing the same warm OCR worker and merges both sides into one
+     * unified ExtractedIdentity with cross-side consistency checks.
+     */
+    scanPair(front: ImageInput, back: ImageInput, options?: PairScanOptions): Promise<MergedDocumentResult>;
     terminate(): Promise<void>;
 }
 export declare function scanDocumentImage(input: ImageInput, options?: ScannerOptions): Promise<ExtractedIdentity>;
+export declare function scanDocumentPair(front: ImageInput, back: ImageInput, options?: PairScanOptions): Promise<MergedDocumentResult>;

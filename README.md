@@ -6,9 +6,13 @@ Client-side browser OCR and identity document parser for **passports, national I
 
 - **ICAO 9303 MRZ Parsing**: Supports `TD1` (3×30 ID cards), `TD2` (2×36), `TD3` (2×44 passports), and `MRV-A` / `MRV-B` (visas) with Modulo-10 check-digit validation.
 - **Visual Inspection Zone (VIZ) Extraction**: Multilingual field extraction for names (including compound/double surnames), dates, residential addresses, place of birth, issuing authority, sex, height, eye color, and driver license categories.
+- **4-Corner Perspective Correction**: Pure-JS automatic document quadrilateral detection + 3×3 homography bilinear dewarping (plus optional manual `corners` override) for angled mobile or tabletop photos.
+- **Two-Sided Document Merging**: `scanPair()` / `scanDocumentPair()` / `mergeDocumentSides()` combine front and back scans (even if swapped), enrich diacritics & missing fields, and validate cross-side consistency.
 - **Auto-Rotate & Deskew**: Pure-JS fine tilt estimation (`±45°`) + 4-way orientation detection (`0°`, `90°`, `180°`, `270°`) with upright OCR verification.
 - **Dual-Pass Image Preprocessing**: Adaptive contrast stretching, flat-field lighting normalization, and dedicated MRZ strip isolation.
 - **Framework-Agnostic SDK (`src/scanner/`)**: Zero React or UI dependencies; ships with ready-compiled `latest` and version-pinned (`v0.0.1`) ESM & UMD browser bundles plus TypeScript `.d.ts` declarations in `public/lib/`.
+
+See [ROADMAP.md](./ROADMAP.md) for shipped capabilities and upcoming enhancements.
 
 ---
 
@@ -33,6 +37,7 @@ Always load the latest build from your `main` branch:
     if (!file) return;
 
     const identity = await scanner.scan(file, {
+      perspectiveCorrection: true,
       autoRotate: true,
       onProgress: ({ stage, progress, message }) => {
         console.log(`[${stage}] ${progress}% - ${message}`);
@@ -57,14 +62,19 @@ Or pin a specific Git tag/version for immutable production caching:
   import {
     DocumentScanner,
     scanDocumentImage,
+    scanDocumentPair,
     SCANNER_VERSION,
   } from 'https://cdn.jsdelivr.net/gh/<USERNAME>/<REPO>@main/public/lib/docscan-ocr.latest.es.js';
 
-  // One-shot helper (automatically creates & terminates the OCR worker)
+  // Single document (auto perspective + auto-rotate)
   const identity = await scanDocumentImage(fileOrDataUrl, {
+    perspectiveCorrection: true,
     autoRotate: true,
     includePreviews: false,
   });
+
+  // Or scan & merge a two-sided national ID (front + back)
+  // const merged = await scanDocumentPair(frontFile, backFile);
 
   console.log(`v${SCANNER_VERSION}`, identity);
 </script>
@@ -102,46 +112,60 @@ npm install ../path/to/docscan-ocr
 Then import it in your TypeScript/JavaScript project:
 
 ```ts
-import { DocumentScanner, scanDocumentImage, SCANNER_VERSION } from 'docscan-ocr';
+import {
+  DocumentScanner,
+  scanDocumentImage,
+  scanDocumentPair,
+  SCANNER_VERSION,
+} from 'docscan-ocr';
 
 const scanner = new DocumentScanner();
+
+// Single document
 const identity = await scanner.scan(file, {
+  perspectiveCorrection: true,
   autoRotate: true,
   preprocess: true,
   enhanceMrzPass: true,
 });
 
-console.log(identity.fullName, identity.documentNumber, identity.mrz?.allCheckDigitsValid);
+// Two-sided ID (reuses warm Tesseract worker across both sides)
+const merged = await scanner.scanPair(frontFile, backFile);
+console.log(merged.fullName, merged.address, merged.sidesConsistent, merged.conflicts);
 
 // Call when unmounting / done scanning
 await scanner.terminate();
 ```
 
-> **Tip:** If your bundler supports importing TypeScript source directly (e.g. Vite) and you prefer tree-shaking against your own `tesseract.js` install, you can also import `from 'docscan-ocr/source'`.
-
 ---
 
 ## Other Integration Methods
 
-### 1. Copy the Standalone Source Folder (`src/scanner/`)
+### 1. Manual 4-Corner Perspective Override
 
-If you want full source control without installing the whole repository:
+If you want users to manually adjust corners in a custom UI, pass normalized `[0..1]` coordinates via `corners`:
+
+```ts
+const identity = await scanner.scan(angledPhoto, {
+  corners: {
+    topLeft: { x: 0.08, y: 0.12 },
+    topRight: { x: 0.91, y: 0.09 },
+    bottomRight: { x: 0.94, y: 0.88 },
+    bottomLeft: { x: 0.06, y: 0.85 },
+  },
+});
+```
+
+### 2. Copy the Standalone Source Folder (`src/scanner/`)
 
 1. Copy the `src/scanner/` directory into your project.
 2. Install only the single runtime dependency:
    ```bash
    npm install tesseract.js
    ```
-3. Import from your local folder:
-   ```ts
-   import { DocumentScanner } from './scanner';
-   ```
+3. Import from `./scanner`.
 
-`src/scanner/` has zero React, Vite, or backend dependencies—it relies solely on browser DOM (`Canvas` / `Image`) APIs and `tesseract.js`.
-
-### 2. Self-Hosting Tesseract Worker, WASM & Language Data (Strict CSP / Offline)
-
-By default, `tesseract.js` fetches its worker script, WASM core, and `eng.traineddata` from CDN at runtime. For strict Content Security Policy (CSP) or air-gapped environments, pass custom paths when constructing `DocumentScanner` or calling `scanDocumentImage`:
+### 3. Self-Hosting Tesseract Worker, WASM & Language Data (Strict CSP / Offline)
 
 ```ts
 import { DocumentScanner } from 'docscan-ocr';
@@ -154,20 +178,16 @@ const scanner = new DocumentScanner({
 });
 ```
 
-### 3. Standalone Pure Helpers (No OCR Worker Needed)
-
-You can also use the pure MRZ, VIZ, and orientation utilities independently with text from any OCR source or image element:
+### 4. Standalone Pure Helpers (No OCR Worker Needed)
 
 ```ts
 import {
   analyzeDocumentOrientation,
+  detectDocumentQuad,
+  mergeDocumentSides,
   parseMrzFromText,
   parseVizText,
 } from 'docscan-ocr';
-
-const orientation = await analyzeDocumentOrientation(imgElement);
-const mrz = parseMrzFromText(rawOcrText);
-const viz = parseVizText(rawOcrText);
 ```
 
 ---
@@ -187,20 +207,11 @@ const viz = parseVizText(rawOcrText);
 ## Development & Build Scripts
 
 ```bash
-# Install dependencies
-npm install
-
-# Run the interactive demo workbench (port 3000)
-npm run dev
-
-# Type-check with TypeScript
-npm run lint
-
-# Build the demo web application (outputs to dist/)
-npm run build
-
-# Rebuild both versioned (vX.Y.Z) and latest ESM/UMD bundles + .d.ts types (outputs to public/lib/)
-npm run build:lib
+npm install      # Install dependencies
+npm run dev      # Run interactive demo workbench (port 3000)
+npm run lint     # Type-check with TypeScript
+npm run build    # Build demo web application (dist/)
+npm run build:lib # Rebuild latest + versioned ESM/UMD bundles & .d.ts types (public/lib/)
 ```
 
 ## Project Structure
@@ -212,7 +223,9 @@ npm run build:lib
 │   ├── scanner/                 # Framework-agnostic OCR & parser SDK
 │   │   ├── index.ts             # Public library entry point
 │   │   ├── version.ts           # SCANNER_VERSION ('0.0.1')
-│   │   ├── ocrEngine.ts         # DocumentScanner class & scanDocumentImage helper
+│   │   ├── ocrEngine.ts         # DocumentScanner class, scanDocumentImage & scanDocumentPair
+│   │   ├── perspective.ts       # 4-corner quad detection & 3x3 homography perspective warp
+│   │   ├── pairMerger.ts        # Front + back ID merging & consistency conflict detection
 │   │   ├── orientation.ts       # Fine deskew & 4-way orientation analyzer
 │   │   ├── imagePreprocessor.ts # Canvas scaling, rotation & MRZ contrast enhancement
 │   │   ├── mrzParser.ts         # ICAO 9303 MRZ parser & Modulo-10 check digits
@@ -221,6 +234,7 @@ npm run build:lib
 │   │   └── types.ts             # TypeScript interfaces
 │   ├── components/              # React workbench UI components
 │   └── App.tsx                  # Interactive demo application
+├── ROADMAP.md                   # Feature roadmap and progress tracker
 ├── vite.config.ts               # Web application Vite config
 ├── vite.lib.config.ts           # Standalone library Vite build config
 └── tsconfig.lib.json            # Declaration (.d.ts) compiler config

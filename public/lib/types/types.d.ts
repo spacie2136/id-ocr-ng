@@ -1,6 +1,28 @@
 export type DocumentType = 'passport' | 'id_card' | 'driver_license' | 'residence_permit' | 'visa' | 'unknown';
 export type MrzFormat = 'TD1' | 'TD2' | 'TD3' | 'MRVA' | 'MRVB';
 export type FieldSource = 'MRZ' | 'VIZ' | 'MRZ+VIZ' | 'COMPUTED';
+export interface Point2D {
+    /** Normalized X coordinate in [0..1] relative to source image width */
+    x: number;
+    /** Normalized Y coordinate in [0..1] relative to source image height */
+    y: number;
+}
+export interface DocumentQuad {
+    topLeft: Point2D;
+    topRight: Point2D;
+    bottomRight: Point2D;
+    bottomLeft: Point2D;
+}
+export interface PerspectiveInfo {
+    /** Whether a 4-corner perspective warp was applied */
+    applied: boolean;
+    /** True when corners were detected automatically vs supplied manually */
+    autoDetected: boolean;
+    /** Normalized [0..1] corners in the original source image */
+    corners: DocumentQuad;
+    /** Fraction of source image area occupied by the detected quadrilateral */
+    sourceQuadAreaRatio: number;
+}
 export interface CheckDigitStatus {
     label: string;
     field: string;
@@ -119,13 +141,32 @@ export interface ExtractedIdentity {
         height: number;
     };
     orientation?: OrientationInfo;
+    perspective?: PerspectiveInfo;
     previews?: {
         originalDataUrl: string;
         enhancedDataUrl: string;
         mrzCropDataUrl: string;
     };
 }
-export type ScanStage = 'detecting_orientation' | 'preprocessing' | 'initializing_ocr' | 'recognizing_full' | 'recognizing_mrz' | 'parsing' | 'complete';
+export interface SideConsistencyConflict {
+    field: string;
+    frontValue: string;
+    backValue: string;
+    resolution: string;
+}
+export interface MergedDocumentResult extends ExtractedIdentity {
+    sides: {
+        front: ExtractedIdentity;
+        back: ExtractedIdentity;
+    };
+    /** Indicates how front and back sides were matched during merging */
+    sideAssignment: 'front+back' | 'swapped_detected' | 'both_mrz' | 'visual_only';
+    /** Cross-side discrepancies detected between front and back scans */
+    conflicts: SideConsistencyConflict[];
+    /** True when no key identity conflicts exist between front and back */
+    sidesConsistent: boolean;
+}
+export type ScanStage = 'detecting_perspective' | 'detecting_orientation' | 'preprocessing' | 'initializing_ocr' | 'recognizing_full' | 'recognizing_mrz' | 'parsing' | 'complete';
 export interface ScanProgress {
     stage: ScanStage;
     progress: number;
@@ -148,6 +189,10 @@ export interface ScannerOptions extends TesseractWorkerConfig {
     preprocess?: boolean;
     /** Run a dedicated high-contrast MRZ bottom-strip OCR pass (default: true) */
     enhanceMrzPass?: boolean;
+    /** Automatically detect and dewarp 4-corner perspective distortion (default: true) */
+    perspectiveCorrection?: boolean;
+    /** Explicit normalized [0..1] 4-corner quad override to warp before OCR */
+    corners?: DocumentQuad;
     /** Automatically detect rotation (0/90/180/270) and deskew tilted documents (default: true) */
     autoRotate?: boolean;
     /** Rotate input image clockwise in degrees before processing (0 | 90 | 180 | 270) */
@@ -158,6 +203,12 @@ export interface ScannerOptions extends TesseractWorkerConfig {
     includePreviews?: boolean;
     /** Progress listener callback */
     onProgress?: (progress: ScanProgress) => void;
+}
+export interface PairScanOptions extends Omit<ScannerOptions, 'corners' | 'rotation' | 'deskewDegrees'> {
+    /** Per-side options overriding shared options for the front image */
+    frontOptions?: ScannerOptions;
+    /** Per-side options overriding shared options for the back image */
+    backOptions?: ScannerOptions;
 }
 export interface GrayscaleBuffer {
     data: Uint8ClampedArray;

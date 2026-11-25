@@ -4,7 +4,7 @@ export declare function loadImageElement(input: ImageInput): Promise<HTMLImageEl
  * Renders a compact downscaled grayscale buffer (max dimension ~400px)
  * for fast client-side orientation and skew estimation.
  */
-export declare function sampleDownscaledGrayscale(img: HTMLImageElement, maxDim?: number): GrayscaleBuffer;
+export declare function sampleDownscaledGrayscale(img: HTMLImageElement | HTMLCanvasElement, maxDim?: number): GrayscaleBuffer;
 /**
  * Prepares original, contrast-enhanced full-document, and dual MRZ-strip
  * canvases directly inside the browser with support for coarse 90-degree

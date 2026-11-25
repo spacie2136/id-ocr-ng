@@ -7,16 +7,17 @@ import {
   Download,
   FileCode2,
   FileText,
+  Layers,
   ShieldAlert,
   ShieldCheck,
   UserCheck,
 } from 'lucide-react';
-import type { ExtractedIdentity, FieldSource } from '../scanner';
+import type { ExtractedIdentity, FieldSource, MergedDocumentResult } from '../scanner';
 
 type ResultTab = 'fields' | 'mrz' | 'raw' | 'json';
 
 interface ExtractedResultsPanelProps {
-  result: ExtractedIdentity | null;
+  result: ExtractedIdentity | MergedDocumentResult | null;
   isScanning: boolean;
   error: string | null;
   onExportJson: () => void;
@@ -40,6 +41,24 @@ const DOC_TYPE_LABELS: Record<ExtractedIdentity['documentType'], string> = {
   visa: 'Visa',
   unknown: 'Unclassified Document',
 };
+
+function sanitizeJsonForDisplay(res: ExtractedIdentity | MergedDocumentResult): string {
+  if ('sides' in res) {
+    return JSON.stringify(
+      {
+        ...res,
+        previews: undefined,
+        sides: {
+          front: { ...res.sides.front, previews: undefined },
+          back: { ...res.sides.back, previews: undefined },
+        },
+      },
+      null,
+      2
+    );
+  }
+  return JSON.stringify({ ...res, previews: undefined }, null, 2);
+}
 
 export const ExtractedResultsPanel: React.FC<ExtractedResultsPanelProps> = ({
   result,
@@ -153,17 +172,8 @@ export const ExtractedResultsPanel: React.FC<ExtractedResultsPanelProps> = ({
     );
   };
 
-  // Build sanitized JSON without base64 preview data URLs so exported payload stays clean
-  const cleanJsonPayload = result
-    ? JSON.stringify(
-        {
-          ...result,
-          previews: undefined,
-        },
-        null,
-        2
-      )
-    : '';
+  const mergedResult = result && 'sides' in result ? result : null;
+  const cleanJsonPayload = result ? sanitizeJsonForDisplay(result) : '';
 
   return (
     <section className="flex flex-col bg-white border border-slate-200 rounded-xl overflow-hidden">
@@ -182,6 +192,12 @@ export const ExtractedResultsPanel: React.FC<ExtractedResultsPanelProps> = ({
               <span className="font-mono tabular-nums">{result.confidence}% OCR confidence</span>
               <span aria-hidden="true">·</span>
               <span className="font-mono tabular-nums">{result.processingTimeMs} ms</span>
+              {result.perspective?.applied && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span className="font-mono text-emerald-700">Perspective rectified</span>
+                </>
+              )}
               {result.orientation && result.orientation.totalDegrees !== 0 && (
                 <>
                   <span aria-hidden="true">·</span>
@@ -267,7 +283,7 @@ export const ExtractedResultsPanel: React.FC<ExtractedResultsPanelProps> = ({
             <UserCheck className="w-9 h-9 text-slate-300 mb-3" />
             <h3 className="text-sm font-semibold text-slate-900">No Document Scanned Yet</h3>
             <p className="text-xs text-slate-500 max-w-sm mt-1 leading-relaxed">
-              Upload a passport, national ID card, or driver&apos;s license on the left — or generate a test specimen — to extract all personal information directly in the browser.
+              Upload a passport, national ID card, or driver&apos;s license on the left — or switch to Front + Back ID to merge two-sided documents directly in the browser.
             </p>
           </div>
         )}
@@ -288,6 +304,45 @@ export const ExtractedResultsPanel: React.FC<ExtractedResultsPanelProps> = ({
 
         {result && activeTab === 'fields' && (
           <div className="flex flex-col">
+            {mergedResult && (
+              <div
+                className={`mb-4 p-3 rounded-lg border text-xs flex items-start gap-2.5 ${
+                  mergedResult.sidesConsistent
+                    ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900'
+                    : 'bg-amber-50 border-amber-200 text-amber-900'
+                }`}
+              >
+                <Layers className="w-4 h-4 shrink-0 mt-0.5" />
+                <div className="min-w-0 flex-1">
+                  <div className="font-semibold flex flex-wrap items-center gap-2">
+                    <span>Two-Sided Document Merged</span>
+                    {mergedResult.sideAssignment === 'swapped_detected' && (
+                      <span className="font-mono text-[11px] font-medium text-blue-700">
+                        (Swapped sides auto-reconciled)
+                      </span>
+                    )}
+                    <span className="font-normal">
+                      ·{' '}
+                      {mergedResult.sidesConsistent
+                        ? 'Overlapping fields consistent across front & back'
+                        : `${mergedResult.conflicts.length} cross-side discrepancy detected`}
+                    </span>
+                  </div>
+                  {mergedResult.conflicts.length > 0 && (
+                    <ul className="mt-1.5 space-y-1 text-[11px]">
+                      {mergedResult.conflicts.map((c) => (
+                        <li key={c.field}>
+                          <span className="font-mono font-semibold">{c.field}</span>: Front (
+                          <span className="font-mono">{c.frontValue}</span>) vs Back (
+                          <span className="font-mono">{c.backValue}</span>) — {c.resolution}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Summary strip */}
             <div className="flex flex-wrap items-center justify-between gap-3 pb-4 mb-5 border-b border-slate-200">
               <div>

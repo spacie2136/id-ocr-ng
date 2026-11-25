@@ -10,27 +10,27 @@ const UMD_SNIPPET = `<!-- Always use the latest build via GitHub + jsDelivr (or 
 
   const scanner = new DocumentScanner();
 
-  document.getElementById('id-input').addEventListener('change', async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const identity = await scanner.scan(file, {
-      autoRotate: true,
-      preprocess: true,
-      enhanceMrzPass: true,
-      onProgress: ({ stage, progress, message }) => {
-        console.log(\`[\${stage}] \${progress}% — \${message}\`);
-      },
-    });
-
-    console.log(identity.fullName, identity.documentNumber, identity.mrz?.allCheckDigitsValid);
+  // Single document with 4-corner perspective correction + auto-rotate
+  const identity = await scanner.scan(file, {
+    perspectiveCorrection: true,
+    autoRotate: true,
+    preprocess: true,
+    enhanceMrzPass: true,
   });
+
+  // Or scan & merge front + back sides of a national ID / residence permit
+  const merged = await scanner.scanPair(frontFile, backFile, {
+    perspectiveCorrection: true,
+    autoRotate: true,
+  });
+  console.log(merged.fullName, merged.address, merged.sidesConsistent, merged.conflicts);
 </script>`;
 
 const ESM_REMOTE_SNIPPET = `<script type="module">
   import {
     DocumentScanner,
     scanDocumentImage,
+    scanDocumentPair,
     SCANNER_VERSION,
   } from 'https://cdn.jsdelivr.net/gh/<USERNAME>/<REPO>@main/public/lib/docscan-ocr.latest.es.js';
 
@@ -42,37 +42,55 @@ const ESM_REMOTE_SNIPPET = `<script type="module">
     workerBlobURL: false,
   });
 
-  // Or run a single one-shot scan (creates and terminates worker automatically)
-  const result = await scanDocumentImage(imageFileOrDataUrl, {
+  // One-shot two-sided ID scan & merge
+  const merged = await scanDocumentPair(frontFile, backFile, {
+    perspectiveCorrection: true,
     autoRotate: true,
     includePreviews: false,
   });
 
-  console.log(\`v\${SCANNER_VERSION}\`, result);
+  console.log(\`v\${SCANNER_VERSION}\`, merged);
 </script>`;
 
 const SOURCE_SNIPPET = `import {
   DocumentScanner,
   analyzeDocumentOrientation,
+  detectDocumentQuad,
+  mergeDocumentSides,
   parseMrzFromText,
   parseVizText,
 } from './scanner';
 
 // Keep one scanner instance to reuse the WebAssembly worker across scans
 const scanner = new DocumentScanner();
-const identity = await scanner.scan(file, { language: 'eng', autoRotate: true });
+const front = await scanner.scan(frontFile, { perspectiveCorrection: true, autoRotate: true });
+const back = await scanner.scan(backFile, { perspectiveCorrection: true, autoRotate: true });
 
-// Or invoke individual pure utilities directly
-const orientation = await analyzeDocumentOrientation(imageElement);
-const mrz = parseMrzFromText(rawText);
-const viz = parseVizText(rawText);
+// Merge separately scanned sides cleanly & check cross-side consistency
+const merged = mergeDocumentSides(front, back);
 
-// Call scanner.terminate() when unmounting or shutting down`;
+// Or pass explicit normalized [0..1] corners to warp a tilted photo before OCR
+const customWarped = await scanner.scan(angledPhoto, {
+  corners: {
+    topLeft: { x: 0.08, y: 0.12 },
+    topRight: { x: 0.91, y: 0.09 },
+    bottomRight: { x: 0.94, y: 0.88 },
+    bottomLeft: { x: 0.06, y: 0.85 },
+  },
+});`;
 
 const MODULES = [
   {
     name: 'ocrEngine.ts',
-    role: 'Tesseract.js worker orchestration, custom worker/WASM paths, orientation probing, dual-pass scanning, and field merging.',
+    role: 'Tesseract.js worker orchestration, perspective & orientation probing, scanPair(), and dual-pass MRZ merging.',
+  },
+  {
+    name: 'perspective.ts',
+    role: 'Pure-JS 4-corner document quadrilateral detector, orthogonal boundary refiner, and 3×3 homography bilinear warp.',
+  },
+  {
+    name: 'pairMerger.ts',
+    role: 'Two-sided Front + Back identity merger with swapped-side detection, accented VIZ enrichment, and consistency conflict checks.',
   },
   {
     name: 'orientation.ts',
@@ -91,12 +109,8 @@ const MODULES = [
     role: 'Multilingual Visual Inspection Zone extractor for names, dates, addresses, authorities, and license details.',
   },
   {
-    name: 'countries.ts',
-    role: 'ISO 3166-1 alpha-3 and ICAO special issuing-state lookup dictionary.',
-  },
-  {
-    name: 'version.ts & types.ts',
-    role: `Library version export (v${SCANNER_VERSION}) and strict framework-agnostic TypeScript interfaces.`,
+    name: 'countries.ts, version.ts & types.ts',
+    role: `ISO 3166-1/ICAO country lookup, v${SCANNER_VERSION} version export, and framework-agnostic TypeScript interfaces.`,
   },
 ];
 
@@ -138,7 +152,6 @@ export const IntegrationGuide: React.FC = () => {
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-      {/* Architecture & ready-compiled bundle overview */}
       <div className="lg:col-span-5 flex flex-col gap-6">
         <section className="bg-white border border-slate-200 rounded-xl p-5">
           <div className="flex items-center justify-between gap-2 mb-3">
@@ -208,7 +221,6 @@ export const IntegrationGuide: React.FC = () => {
         </section>
       </div>
 
-      {/* Integration snippets */}
       <section className="lg:col-span-7 flex flex-col gap-6">
         <div className="bg-white border border-slate-200 rounded-xl p-5">
           <div className="flex items-center justify-between gap-4 mb-3">
@@ -246,7 +258,7 @@ export const IntegrationGuide: React.FC = () => {
             <div className="flex items-center gap-2">
               <Globe className="w-4 h-4 text-blue-600" />
               <h3 className="text-sm font-semibold text-slate-900">
-                02. Remote ES Module &amp; Self-Hosted Worker Paths
+                02. Remote ES Module, Pair Scan &amp; Worker Config
               </h3>
             </div>
             <button
@@ -277,7 +289,7 @@ export const IntegrationGuide: React.FC = () => {
             <div className="flex items-center gap-2">
               <Terminal className="w-4 h-4 text-blue-600" />
               <h3 className="text-sm font-semibold text-slate-900">
-                03. Direct TypeScript Source &amp; Standalone Parsers
+                03. Two-Sided Merging &amp; Manual Perspective Corners
               </h3>
             </div>
             <button
