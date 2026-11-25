@@ -1,8 +1,24 @@
 {
-  "name": "react-example",
+  "name": "docscan-ocr",
   "private": true,
   "version": "0.0.1",
   "type": "module",
+  "main": "./public/lib/docscan-ocr.v0.0.1.umd.js",
+  "module": "./public/lib/docscan-ocr.v0.0.1.es.js",
+  "types": "./public/lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./public/lib/types/index.d.ts",
+      "import": "./public/lib/docscan-ocr.v0.0.1.es.js",
+      "require": "./public/lib/docscan-ocr.v0.0.1.umd.js",
+      "default": "./public/lib/docscan-ocr.v0.0.1.es.js"
+    },
+    "./source": "./src/scanner/index.ts"
+  },
+  "files": [
+    "public/lib",
+    "src/scanner"
+  ],
   "scripts": {
     "dev": "vite --port=3000 --host=0.0.0.0",
     "build": "vite build",
