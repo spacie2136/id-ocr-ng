@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Camera,
+  Compass,
   FileImage,
   Loader2,
   RotateCw,
@@ -23,11 +24,13 @@ interface DocumentViewportProps {
   isScanning: boolean;
   progress: ScanProgress | null;
   rotation: 0 | 90 | 180 | 270;
+  autoRotate: boolean;
   preprocess: boolean;
   enhanceMrzPass: boolean;
   onSelectFile: (file: File) => void;
   onClearFile: () => void;
   onRotate: () => void;
+  onToggleAutoRotate: (val: boolean) => void;
   onTogglePreprocess: (val: boolean) => void;
   onToggleMrzPass: (val: boolean) => void;
   onTriggerScan: () => void;
@@ -40,11 +43,13 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
   isScanning,
   progress,
   rotation,
+  autoRotate,
   preprocess,
   enhanceMrzPass,
   onSelectFile,
   onClearFile,
   onRotate,
+  onToggleAutoRotate,
   onTogglePreprocess,
   onToggleMrzPass,
   onTriggerScan,
@@ -162,6 +167,24 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
       return result.previews.originalDataUrl;
     }
     return previewUrl;
+  })();
+
+  const appliedAngleLabel = (() => {
+    if (result?.orientation) {
+      const { coarseDegrees, deskewDegrees, totalDegrees, autoDetected } = result.orientation;
+      if (totalDegrees !== 0) {
+        const prefix = autoDetected ? 'Auto-straightened' : 'Rotated';
+        if (coarseDegrees !== 0 && deskewDegrees !== 0) {
+          return `${prefix} ${coarseDegrees}° (${deskewDegrees > 0 ? '+' : ''}${deskewDegrees}° skew)`;
+        }
+        if (coarseDegrees !== 0) {
+          return `${prefix} ${coarseDegrees}°`;
+        }
+        return `${prefix} ${deskewDegrees > 0 ? '+' : ''}${deskewDegrees}°`;
+      }
+      return null;
+    }
+    return rotation !== 0 ? `${rotation}°` : null;
   })();
 
   return (
@@ -340,7 +363,7 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
           <div className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2 text-xs text-slate-600 min-w-0">
-                <span className="font-medium text-slate-900 truncate max-w-[220px]">
+                <span className="font-medium text-slate-900 truncate max-w-[200px]">
                   {selectedFile?.name ?? 'Captured Document'}
                 </span>
                 {result?.sourceDimensions && (
@@ -351,10 +374,12 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
                     </span>
                   </>
                 )}
-                {rotation !== 0 && (
+                {appliedAngleLabel && (
                   <>
                     <span aria-hidden="true">·</span>
-                    <span className="font-mono tabular-nums">{rotation}°</span>
+                    <span className="font-mono tabular-nums text-blue-700 font-medium">
+                      {appliedAngleLabel}
+                    </span>
                   </>
                 )}
               </div>
@@ -386,7 +411,7 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
                   type="button"
                   onClick={onRotate}
                   disabled={isScanning}
-                  title="Rotate 90° clockwise"
+                  title="Manual rotate 90° clockwise (disables auto-rotate)"
                   className="p-1.5 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-md transition-colors disabled:opacity-40"
                 >
                   <RotateCw className="w-4 h-4" />
@@ -466,7 +491,7 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
                 Drop a passport, ID card, or driver&apos;s license image here
               </p>
               <p className="text-xs text-slate-500 mt-1">
-                Supports PNG, JPG, WebP · Or click to browse local files
+                Supports PNG, JPG, WebP, AVIF · Auto-straightens rotated scans
               </p>
               <button
                 type="button"
@@ -497,6 +522,20 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
         {/* Scanner Preprocessing Options & Run Trigger */}
         <div className="pt-3 border-t border-slate-200 flex flex-wrap items-center justify-between gap-4">
           <div className="flex flex-wrap items-center gap-4 text-xs text-slate-700">
+            <label className="inline-flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={autoRotate}
+                onChange={(e) => onToggleAutoRotate(e.target.checked)}
+                disabled={isScanning}
+                className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+              />
+              <span className="flex items-center gap-1">
+                <Compass className="w-3.5 h-3.5 text-slate-400" />
+                Auto-Rotate &amp; Deskew
+              </span>
+            </label>
+
             <label className="inline-flex items-center gap-2 cursor-pointer select-none">
               <input
                 type="checkbox"

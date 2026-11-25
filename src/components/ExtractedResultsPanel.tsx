@@ -182,6 +182,14 @@ export const ExtractedResultsPanel: React.FC<ExtractedResultsPanelProps> = ({
               <span className="font-mono tabular-nums">{result.confidence}% OCR confidence</span>
               <span aria-hidden="true">·</span>
               <span className="font-mono tabular-nums">{result.processingTimeMs} ms</span>
+              {result.orientation && result.orientation.totalDegrees !== 0 && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span className="font-mono tabular-nums text-blue-700">
+                    Straightened {result.orientation.totalDegrees}°
+                  </span>
+                </>
+              )}
             </div>
           ) : (
             <p className="text-xs text-slate-500 mt-0.5">

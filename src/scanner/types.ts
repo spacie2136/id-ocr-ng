@@ -80,6 +80,17 @@ export interface VizParsedData {
   unmappedKeyValues: Record<string, string>;
 }
 
+export interface OrientationInfo {
+  /** Coarse clockwise rotation applied (0 | 90 | 180 | 270) */
+  coarseDegrees: 0 | 90 | 180 | 270;
+  /** Fine deskew clockwise angle applied in degrees ([-45, 45]) */
+  deskewDegrees: number;
+  /** Combined clockwise straightening rotation in degrees */
+  totalDegrees: number;
+  /** Whether orientation was automatically detected vs fixed manual rotation */
+  autoDetected: boolean;
+}
+
 export interface ExtractedIdentity {
   documentType: DocumentType;
   documentFormat: MrzFormat | 'VISUAL_ONLY';
@@ -118,6 +129,7 @@ export interface ExtractedIdentity {
   confidence: number;
   processingTimeMs: number;
   sourceDimensions: { width: number; height: number };
+  orientation?: OrientationInfo;
   previews?: {
     originalDataUrl: string;
     enhancedDataUrl: string;
@@ -126,6 +138,7 @@ export interface ExtractedIdentity {
 }
 
 export type ScanStage =
+  | 'detecting_orientation'
   | 'preprocessing'
   | 'initializing_ocr'
   | 'recognizing_full'
@@ -139,15 +152,30 @@ export interface ScanProgress {
   message: string;
 }
 
-export interface ScannerOptions {
+export interface TesseractWorkerConfig {
+  /** Custom URL/path to Tesseract worker.min.js (useful for strict CSP or self-hosting) */
+  workerPath?: string;
+  /** Custom URL/path to Tesseract WASM core directory */
+  corePath?: string;
+  /** Custom URL/path to directory containing *.traineddata.gz files */
+  langPath?: string;
+  /** Set false when loading workerPath directly without wrapping in a Blob URL */
+  workerBlobURL?: boolean;
+}
+
+export interface ScannerOptions extends TesseractWorkerConfig {
   /** Tesseract language code(s), defaults to 'eng' */
   language?: string;
   /** Apply grayscale & contrast stretching before OCR (default: true) */
   preprocess?: boolean;
   /** Run a dedicated high-contrast MRZ bottom-strip OCR pass (default: true) */
   enhanceMrzPass?: boolean;
+  /** Automatically detect rotation (0/90/180/270) and deskew tilted documents (default: true) */
+  autoRotate?: boolean;
   /** Rotate input image clockwise in degrees before processing (0 | 90 | 180 | 270) */
   rotation?: 0 | 90 | 180 | 270;
+  /** Fine clockwise deskew override in degrees when autoRotate is disabled (default: 0) */
+  deskewDegrees?: number;
   /** Include processed preview data URLs in the result (default: true) */
   includePreviews?: boolean;
   /** Progress listener callback */

@@ -1,7 +1,12 @@
 import { createWorker, PSM, type Block, type Symbol as TessSymbol, type Worker } from 'tesseract.js';
 import { resolveCountryName } from './countries';
-import { preprocessDocumentImage } from './imagePreprocessor';
+import {
+  loadImageElement,
+  preprocessDocumentImage,
+  sampleDownscaledGrayscale,
+} from './imagePreprocessor';
 import { parseMrzFromText } from './mrzParser';
+import { analyzeDocumentOrientation } from './orientation';
 import type {
   DocumentType,
   ExtractedIdentity,
@@ -9,9 +14,13 @@ import type {
   GrayscaleBuffer,
   ImageInput,
   MrzParsedData,
+  OrientationInfo,
+  PreprocessedResult,
   ScanProgress,
   ScannerOptions,
+  TesseractWorkerConfig,
   VizLineBox,
+  VizParsedData,
 } from './types';
 import { parseVizText } from './vizParser';
 
@@ -103,7 +112,7 @@ function reconcileDocumentNumber(
     const docCheck = mrz.checkDigits.find((c) => c.field === 'documentNumber');
     const mrzNorm = mrz.documentNumber.trim().toUpperCase();
     const vizNorm = vizDocNum.trim().toUpperCase();
-    // If MRZ document check digit failed (e.g. specimen mismatch or B/8 ambiguity)
+    // If MRZ document check digit failed (e.g. specimen mismatch or B/8, 0/O ambiguity)
     // and VIZ matches length & confusable skeleton, prefer the crisp VIZ reading
     if (
       docCheck &&
@@ -291,12 +300,12 @@ function inspectInkBox(
   const isChevron =
     gw >= 10 &&
     gh >= 14 &&
-    d(0, 0) <= 0.22 &&
-    d(2, 0) <= 0.22 &&
-    d(1, 0) >= 0.48 &&
-    d(1, 2) <= 0.22 &&
-    d(0, 2) >= 0.35 &&
-    d(2, 2) >= 0.35;
+    d(0, 0) <= 0.24 &&
+    d(2, 0) <= 0.24 &&
+    d(1, 0) >= 0.38 &&
+    d(1, 2) <= 0.24 &&
+    d(0, 2) >= 0.28 &&
+    d(2, 2) >= 0.28;
 
   const hasCenterStem = d(0, 1) >= 0.35 && d(1, 1) >= 0.5 && d(2, 1) >= 0.35;
   // OCR-B '1' has a left-pointing top serif that shifts the vertical stem into col 2
@@ -608,19 +617,98 @@ function scoreMrzCandidate(m: MrzParsedData): number {
   );
 }
 
+interface OrientationPassResult {
+  coarse: 0 | 90 | 180 | 270;
+  preprocessed: PreprocessedResult;
+  cleanedFullText: string;
+  vizLineBoxes: VizLineBox[];
+  vizData: VizParsedData;
+  mrzData: MrzParsedData | null;
+  mrzRawText: string;
+  confidence: number;
+  probeScore: number;
+  isConfidentUpright: boolean;
+}
+
+function countPopulatedVizFields(viz: VizParsedData): number {
+  return [
+    viz.surname,
+    viz.givenNames,
+    viz.fullName,
+    viz.documentNumber,
+    viz.dateOfBirth,
+    viz.dateOfExpiry,
+    viz.dateOfIssue,
+    viz.address,
+    viz.nationality,
+    viz.issuingAuthority,
+    viz.placeOfBirth,
+  ].filter((v) => v !== null && String(v).trim() !== '').length;
+}
+
+function scoreOrientationPass(
+  mrz: MrzParsedData | null,
+  viz: VizParsedData,
+  confidence: number,
+  rawText: string
+): number {
+  let score = 0;
+  if (mrz) {
+    score += mrz.validCount * 120;
+    if (mrz.allCheckDigitsValid) score += 200;
+    if (/^[PVIAC]/.test(mrz.documentCode)) score += 60;
+    if (mrz.dateOfBirth) score += 35;
+    if (mrz.dateOfExpiry) score += 35;
+    if (mrz.surname) score += 30;
+    if (mrz.givenNames) score += 25;
+    if (mrz.documentNumber) score += 25;
+  }
+  const vizFields = countPopulatedVizFields(viz);
+  score += vizFields * 28;
+  if (viz.documentTypeHint) score += 25;
+  score += confidence * 0.8;
+  const readableWords = (rawText.match(/[A-Za-z]{3,}/g) || []).length;
+  score += Math.min(readableWords, 30) * 1.5;
+  return score;
+}
+
+function normalizeDegrees360(deg: number): number {
+  const norm = ((deg % 360) + 360) % 360;
+  return Math.round(norm * 10) / 10;
+}
+
 export class DocumentScanner {
   private worker: Worker | null = null;
   private workerLang: string | null = null;
+  private workerConfigKey: string | null = null;
+  private defaultWorkerConfig: TesseractWorkerConfig;
   private activeStageCallback: ((p: ScanProgress) => void) | null = null;
   private activeStage: ScanProgress['stage'] = 'initializing_ocr';
 
+  constructor(workerConfig: TesseractWorkerConfig = {}) {
+    this.defaultWorkerConfig = { ...workerConfig };
+  }
+
   private async ensureWorker(
     language: string,
+    workerConfig: TesseractWorkerConfig,
     onProgress?: (p: ScanProgress) => void
   ): Promise<Worker> {
     this.activeStageCallback = onProgress ?? null;
 
-    if (this.worker && this.workerLang === language) {
+    const mergedConfig: TesseractWorkerConfig = {
+      workerPath: workerConfig.workerPath ?? this.defaultWorkerConfig.workerPath,
+      corePath: workerConfig.corePath ?? this.defaultWorkerConfig.corePath,
+      langPath: workerConfig.langPath ?? this.defaultWorkerConfig.langPath,
+      workerBlobURL: workerConfig.workerBlobURL ?? this.defaultWorkerConfig.workerBlobURL,
+    };
+    const configKey = JSON.stringify(mergedConfig);
+
+    if (
+      this.worker &&
+      this.workerLang === language &&
+      this.workerConfigKey === configKey
+    ) {
       return this.worker;
     }
 
@@ -636,27 +724,36 @@ export class DocumentScanner {
       message: 'Initializing client-side Tesseract OCR engine…',
     });
 
+    const tesseractWorkerOptions: Record<string, unknown> = {
+      logger: (info: { status: string; progress?: number }) => {
+        if (!this.activeStageCallback) return;
+        if (info.status === 'recognizing text') {
+          const base = this.activeStage === 'recognizing_full' ? 25 : 65;
+          const span = this.activeStage === 'recognizing_full' ? 35 : 25;
+          const pct = Math.round(base + (info.progress || 0) * span);
+          this.activeStageCallback({
+            stage: this.activeStage,
+            progress: pct,
+            message:
+              this.activeStage === 'recognizing_full'
+                ? 'Reading document text & visual inspection zone…'
+                : 'Running high-contrast MRZ strip verification…',
+          });
+        }
+      },
+    };
+
+    if (mergedConfig.workerPath) tesseractWorkerOptions.workerPath = mergedConfig.workerPath;
+    if (mergedConfig.corePath) tesseractWorkerOptions.corePath = mergedConfig.corePath;
+    if (mergedConfig.langPath) tesseractWorkerOptions.langPath = mergedConfig.langPath;
+    if (mergedConfig.workerBlobURL !== undefined) {
+      tesseractWorkerOptions.workerBlobURL = mergedConfig.workerBlobURL;
+    }
+
     const worker = await createWorker(
       language,
       1,
-      {
-        logger: (info) => {
-          if (!this.activeStageCallback) return;
-          if (info.status === 'recognizing text') {
-            const base = this.activeStage === 'recognizing_full' ? 25 : 65;
-            const span = this.activeStage === 'recognizing_full' ? 35 : 25;
-            const pct = Math.round(base + (info.progress || 0) * span);
-            this.activeStageCallback({
-              stage: this.activeStage,
-              progress: pct,
-              message:
-                this.activeStage === 'recognizing_full'
-                  ? 'Reading document text & visual inspection zone…'
-                  : 'Running high-contrast MRZ strip verification…',
-            });
-          }
-        },
-      },
+      tesseractWorkerOptions,
       {
         load_system_dawg: '0',
         load_freq_dawg: '0',
@@ -665,35 +762,34 @@ export class DocumentScanner {
 
     this.worker = worker;
     this.workerLang = language;
+    this.workerConfigKey = configKey;
     return worker;
   }
 
-  async scan(input: ImageInput, options: ScannerOptions = {}): Promise<ExtractedIdentity> {
-    const startTime = performance.now();
-    const {
-      language = 'eng',
-      preprocess = true,
-      enhanceMrzPass = true,
-      rotation = 0,
-      includePreviews = true,
-      onProgress,
-    } = options;
-
-    onProgress?.({
-      stage: 'preprocessing',
-      progress: 5,
-      message: 'Preprocessing image & isolating MRZ region…',
+  private async runOrientationPass(
+    img: HTMLImageElement,
+    worker: Worker,
+    coarse: 0 | 90 | 180 | 270,
+    deskewDegrees: number,
+    preprocess: boolean,
+    enhanceMrzPass: boolean,
+    onProgress?: (p: ScanProgress) => void,
+    emitProgress = true
+  ): Promise<OrientationPassResult> {
+    const preprocessed = await preprocessDocumentImage(img, {
+      preprocess,
+      rotation: coarse,
+      deskewDegrees,
     });
 
-    const preprocessed = await preprocessDocumentImage(input, { preprocess, rotation });
-    const worker = await this.ensureWorker(language, onProgress);
-
-    this.activeStage = 'recognizing_full';
-    onProgress?.({
-      stage: 'recognizing_full',
-      progress: 25,
-      message: 'Reading document text & visual inspection zone…',
-    });
+    if (emitProgress) {
+      this.activeStage = 'recognizing_full';
+      onProgress?.({
+        stage: 'recognizing_full',
+        progress: 25,
+        message: 'Reading document text & visual inspection zone…',
+      });
+    }
 
     await worker.setParameters({
       tessedit_pageseg_mode: PSM.SPARSE_TEXT,
@@ -731,12 +827,14 @@ export class DocumentScanner {
     let mrzRawText = '';
 
     if (enhanceMrzPass) {
-      this.activeStage = 'recognizing_mrz';
-      onProgress?.({
-        stage: 'recognizing_mrz',
-        progress: 65,
-        message: 'Running high-contrast MRZ strip verification…',
-      });
+      if (emitProgress) {
+        this.activeStage = 'recognizing_mrz';
+        onProgress?.({
+          stage: 'recognizing_mrz',
+          progress: 65,
+          message: 'Running high-contrast MRZ strip verification…',
+        });
+      }
 
       await worker.setParameters({
         tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
@@ -774,12 +872,185 @@ export class DocumentScanner {
 
       const hasPerfectMrz = candidates.some((c) => c.allCheckDigitsValid);
       if (!hasPerfectMrz) {
-        onProgress?.({
-          stage: 'recognizing_mrz',
-          progress: 80,
-          message: 'Isolating lower passport MRZ band…',
-        });
+        if (emitProgress) {
+          onProgress?.({
+            stage: 'recognizing_mrz',
+            progress: 80,
+            message: 'Isolating lower passport MRZ band…',
+          });
+        }
         await runMrzStrip(preprocessed.mrzTightCropDataUrl, preprocessed.mrzTightGrayscale);
+      }
+    }
+
+    let mrzData: MrzParsedData | null = null;
+    if (candidates.length > 0) {
+      candidates.sort((a, b) => scoreMrzCandidate(b) - scoreMrzCandidate(a));
+      mrzData = candidates[0];
+    }
+
+    const vizData = parseVizText(cleanedFullText, vizLineBoxes);
+    const vizFieldCount = countPopulatedVizFields(vizData);
+    const probeScore = scoreOrientationPass(mrzData, vizData, fullConfidence, cleanedFullText);
+
+    const isConfidentUpright =
+      (mrzData !== null &&
+        (mrzData.allCheckDigitsValid ||
+          mrzData.validCount >= 2 ||
+          (mrzData.validCount >= 1 &&
+            Boolean(mrzData.surname || mrzData.documentNumber) &&
+            fullConfidence >= 48))) ||
+      (mrzData === null && fullConfidence >= 65 && vizFieldCount >= 4);
+
+    return {
+      coarse,
+      preprocessed,
+      cleanedFullText,
+      vizLineBoxes,
+      vizData,
+      mrzData,
+      mrzRawText,
+      confidence: fullConfidence,
+      probeScore,
+      isConfidentUpright,
+    };
+  }
+
+  private async runLightweightProbe(
+    img: HTMLImageElement,
+    worker: Worker,
+    coarse: 0 | 90 | 180 | 270,
+    deskewDegrees: number,
+    preprocess: boolean
+  ): Promise<number> {
+    const preprocessed = await preprocessDocumentImage(img, {
+      preprocess,
+      rotation: coarse,
+      deskewDegrees,
+    });
+
+    await worker.setParameters({
+      tessedit_pageseg_mode: PSM.SPARSE_TEXT,
+      tessedit_char_whitelist: '',
+    });
+
+    const inputUrl = preprocess ? preprocessed.enhancedDataUrl : preprocessed.originalDataUrl;
+    const res = await worker.recognize(inputUrl, {}, { blocks: true });
+    const rawText = res.data.text || '';
+    const conf = res.data.confidence || 0;
+    const boxes = extractVizLineBoxes(res.data.blocks);
+    const cleaned = boxes.length > 0 ? boxes.map((b) => b.text).join('\n') : rawText;
+    const viz = parseVizText(cleaned, boxes);
+    const mrz = parseMrzFromText(rawText);
+
+    return scoreOrientationPass(mrz, viz, conf, cleaned);
+  }
+
+  async scan(input: ImageInput, options: ScannerOptions = {}): Promise<ExtractedIdentity> {
+    const startTime = performance.now();
+    const {
+      language = 'eng',
+      preprocess = true,
+      enhanceMrzPass = true,
+      rotation = 0,
+      deskewDegrees: manualDeskew = 0,
+      includePreviews = true,
+      workerPath,
+      corePath,
+      langPath,
+      workerBlobURL,
+      onProgress,
+    } = options;
+
+    // Default autoRotate to true unless caller explicitly disabled it or passed a non-zero manual rotation
+    const autoRotate =
+      options.autoRotate !== undefined
+        ? options.autoRotate
+        : rotation === 0 && manualDeskew === 0;
+
+    onProgress?.({
+      stage: 'preprocessing',
+      progress: 5,
+      message: autoRotate
+        ? 'Decoding document & analyzing orientation…'
+        : 'Preprocessing image & isolating MRZ region…',
+    });
+
+    const img = await loadImageElement(input);
+    const worker = await this.ensureWorker(
+      language,
+      { workerPath, corePath, langPath, workerBlobURL },
+      onProgress
+    );
+
+    let deskewDegrees = manualDeskew;
+    let candidateOrder: Array<0 | 90 | 180 | 270> = [rotation];
+
+    if (autoRotate) {
+      onProgress?.({
+        stage: 'detecting_orientation',
+        progress: 16,
+        message: 'Detecting document rotation & skew angle…',
+      });
+      const smallGray = sampleDownscaledGrayscale(img, 400);
+      const orient = analyzeDocumentOrientation(smallGray.data, smallGray.width, smallGray.height);
+      deskewDegrees = orient.deskewDegrees;
+      candidateOrder = orient.rankedCoarseRotations;
+    }
+
+    let bestPass = await this.runOrientationPass(
+      img,
+      worker,
+      candidateOrder[0],
+      deskewDegrees,
+      preprocess,
+      enhanceMrzPass,
+      onProgress,
+      true
+    );
+
+    if (autoRotate && !bestPass.isConfidentUpright) {
+      // Probe remaining candidate orientations quickly and run full extraction on the winner if different
+      let bestProbeRot = bestPass.coarse;
+      let bestProbeScore = bestPass.probeScore;
+
+      for (let idx = 1; idx < candidateOrder.length; idx++) {
+        const rot = candidateOrder[idx];
+        onProgress?.({
+          stage: 'detecting_orientation',
+          progress: 82 + idx * 3,
+          message: `Checking ${rot}° orientation alignment…`,
+        });
+
+        const score = await this.runLightweightProbe(
+          img,
+          worker,
+          rot,
+          deskewDegrees,
+          preprocess
+        );
+
+        if (score > bestProbeScore) {
+          bestProbeScore = score;
+          bestProbeRot = rot;
+          // Stop early if an orientation yields clear structured identity data
+          if (score >= 240) {
+            break;
+          }
+        }
+      }
+
+      if (bestProbeRot !== bestPass.coarse) {
+        bestPass = await this.runOrientationPass(
+          img,
+          worker,
+          bestProbeRot,
+          deskewDegrees,
+          preprocess,
+          enhanceMrzPass,
+          onProgress,
+          false
+        );
       }
     }
 
@@ -789,13 +1060,7 @@ export class DocumentScanner {
       message: 'Extracting personal fields & verifying ICAO 9303 check digits…',
     });
 
-    let mrzData: MrzParsedData | null = null;
-    if (candidates.length > 0) {
-      candidates.sort((a, b) => scoreMrzCandidate(b) - scoreMrzCandidate(a));
-      mrzData = candidates[0];
-    }
-
-    const vizData = parseVizText(cleanedFullText, vizLineBoxes);
+    const { preprocessed, cleanedFullText, vizData, mrzData, mrzRawText, confidence } = bestPass;
     const fieldSources: Record<string, FieldSource> = {};
 
     const issuingCountry = pickField(
@@ -911,6 +1176,13 @@ export class DocumentScanner {
 
     const processingTimeMs = Math.round(performance.now() - startTime);
 
+    const orientation: OrientationInfo = {
+      coarseDegrees: bestPass.coarse,
+      deskewDegrees,
+      totalDegrees: normalizeDegrees360(bestPass.coarse + deskewDegrees),
+      autoDetected: autoRotate,
+    };
+
     onProgress?.({
       stage: 'complete',
       progress: 100,
@@ -952,12 +1224,13 @@ export class DocumentScanner {
       fieldSources,
       rawOcrText: cleanedFullText.trim(),
       rawMrzText: mrzRawText,
-      confidence: Math.round(fullConfidence),
+      confidence: Math.round(confidence),
       processingTimeMs,
       sourceDimensions: {
         width: preprocessed.width,
         height: preprocessed.height,
       },
+      orientation,
       previews: includePreviews
         ? {
             originalDataUrl: preprocessed.originalDataUrl,
@@ -973,6 +1246,7 @@ export class DocumentScanner {
       await this.worker.terminate();
       this.worker = null;
       this.workerLang = null;
+      this.workerConfigKey = null;
     }
   }
 }
@@ -981,7 +1255,12 @@ export async function scanDocumentImage(
   input: ImageInput,
   options: ScannerOptions = {}
 ): Promise<ExtractedIdentity> {
-  const scanner = new DocumentScanner();
+  const scanner = new DocumentScanner({
+    workerPath: options.workerPath,
+    corePath: options.corePath,
+    langPath: options.langPath,
+    workerBlobURL: options.workerBlobURL,
+  });
   try {
     return await scanner.scan(input, options);
   } finally {

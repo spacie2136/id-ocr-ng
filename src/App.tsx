@@ -24,6 +24,7 @@ export default function App() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [rotation, setRotation] = useState<0 | 90 | 180 | 270>(0);
+  const [autoRotate, setAutoRotate] = useState(true);
   const [preprocess, setPreprocess] = useState(true);
   const [enhanceMrzPass, setEnhanceMrzPass] = useState(true);
 
@@ -54,6 +55,7 @@ export default function App() {
       fileToScan: File,
       opts: {
         rot: 0 | 90 | 180 | 270;
+        autoRot: boolean;
         prep: boolean;
         mrzPass: boolean;
       }
@@ -74,6 +76,7 @@ export default function App() {
           language: 'eng',
           preprocess: opts.prep,
           enhanceMrzPass: opts.mrzPass,
+          autoRotate: opts.autoRot,
           rotation: opts.rot,
           includePreviews: true,
           onProgress: (p) => setProgress(p),
@@ -113,10 +116,16 @@ export default function App() {
     setSelectedFile(file);
     setPreviewUrl(nextUrl);
     setRotation(0);
+    setAutoRotate(true);
     setResult(null);
     setError(null);
     setActiveView('workbench');
-    void runScan(file, { rot: 0, prep: preprocess, mrzPass: enhanceMrzPass });
+    void runScan(file, {
+      rot: 0,
+      autoRot: true,
+      prep: preprocess,
+      mrzPass: enhanceMrzPass,
+    });
   };
 
   const handleClearFile = () => {
@@ -130,15 +139,25 @@ export default function App() {
   };
 
   const handleRotate = () => {
-    const nextRotation = ((rotation + 90) % 360) as 0 | 90 | 180 | 270;
+    const baseRotation = result?.orientation?.coarseDegrees ?? rotation;
+    const nextRotation = ((baseRotation + 90) % 360) as 0 | 90 | 180 | 270;
+    setAutoRotate(false);
     setRotation(nextRotation);
     setResult(null);
+  };
+
+  const handleToggleAutoRotate = (enabled: boolean) => {
+    setAutoRotate(enabled);
+    if (enabled) {
+      setRotation(0);
+    }
   };
 
   const handleTriggerScan = () => {
     if (!selectedFile || isScanning) return;
     void runScan(selectedFile, {
       rot: rotation,
+      autoRot: autoRotate,
       prep: preprocess,
       mrzPass: enhanceMrzPass,
     });
@@ -247,7 +266,7 @@ export default function App() {
           </h1>
           <p className="text-sm text-slate-600 mt-1 max-w-3xl">
             {activeView === 'workbench'
-              ? 'Extracts Machine Readable Zone (TD1, TD2, TD3) check digits and Visual Inspection Zone personal fields client-side using Tesseract.js.'
+              ? 'Auto-straightens rotated documents and extracts Machine Readable Zone (TD1, TD2, TD3) check digits and Visual Inspection Zone personal fields client-side using Tesseract.js.'
               : activeView === 'history'
                 ? 'In-memory scans processed during this browser session. No document images or personal data leave your device.'
                 : 'Drop-in TypeScript module architecture designed to be copied straight into future web applications.'}
@@ -264,11 +283,13 @@ export default function App() {
                 isScanning={isScanning}
                 progress={progress}
                 rotation={rotation}
+                autoRotate={autoRotate}
                 preprocess={preprocess}
                 enhanceMrzPass={enhanceMrzPass}
                 onSelectFile={handleSelectFile}
                 onClearFile={handleClearFile}
                 onRotate={handleRotate}
+                onToggleAutoRotate={handleToggleAutoRotate}
                 onTogglePreprocess={setPreprocess}
                 onToggleMrzPass={setEnhanceMrzPass}
                 onTriggerScan={handleTriggerScan}
@@ -345,6 +366,7 @@ export default function App() {
                             onClick={() => {
                               setSelectedFile(item.file);
                               setRotation(0);
+                              setAutoRotate(item.result.orientation?.autoDetected ?? true);
                               setResult(item.result);
                               if (item.result.previews?.originalDataUrl) {
                                 setPreviewUrl(item.result.previews.originalDataUrl);

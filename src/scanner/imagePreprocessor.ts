@@ -1,6 +1,6 @@
 import type { GrayscaleBuffer, ImageInput, PreprocessedResult } from './types';
 
-function loadImageElement(input: ImageInput): Promise<HTMLImageElement> {
+export function loadImageElement(input: ImageInput): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     if (input instanceof HTMLImageElement) {
       if (input.complete && input.naturalWidth > 0) {
@@ -40,6 +40,40 @@ function loadImageElement(input: ImageInput): Promise<HTMLImageElement> {
       img.src = objectUrl;
     }
   });
+}
+
+/**
+ * Renders a compact downscaled grayscale buffer (max dimension ~400px)
+ * for fast client-side orientation and skew estimation.
+ */
+export function sampleDownscaledGrayscale(
+  img: HTMLImageElement,
+  maxDim = 400
+): GrayscaleBuffer {
+  const srcW = Math.max(1, img.naturalWidth || img.width);
+  const srcH = Math.max(1, img.naturalHeight || img.height);
+  const scale = Math.min(1, maxDim / Math.max(srcW, srcH));
+  const width = Math.max(1, Math.round(srcW * scale));
+  const height = Math.max(1, Math.round(srcH * scale));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) throw new Error('2D canvas context unavailable');
+
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, width, height);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'medium';
+  ctx.drawImage(img, 0, 0, width, height);
+
+  const rgba = ctx.getImageData(0, 0, width, height).data;
+  const gray = new Uint8ClampedArray(width * height);
+  for (let i = 0, p = 0; i < rgba.length; i += 4, p++) {
+    gray[p] = Math.round(0.299 * rgba[i] + 0.587 * rgba[i + 1] + 0.114 * rgba[i + 2]);
+  }
+  return { data: gray, width, height };
 }
 
 function applyContrastGrayscale(ctx: CanvasRenderingContext2D, width: number, height: number) {
@@ -192,6 +226,79 @@ function applyRowFlatFieldMrzNormalization(
   return { data: gray, width, height };
 }
 
+/**
+ * Trims pure-white triangular margins introduced by arbitrary-angle deskew rotation
+ * without cropping any actual document content.
+ */
+function trimWhiteRotationMargins(canvas: HTMLCanvasElement): HTMLCanvasElement {
+  const w = canvas.width;
+  const h = canvas.height;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return canvas;
+
+  const data = ctx.getImageData(0, 0, w, h).data;
+  const isContentPixel = (idx: number) =>
+    data[idx] < 248 || data[idx + 1] < 248 || data[idx + 2] < 248;
+
+  const rowHasContent = (y: number) => {
+    let hits = 0;
+    const minHits = Math.max(3, Math.floor(w * 0.01));
+    const step = Math.max(1, Math.floor(w / 160));
+    const rowOff = y * w;
+    for (let x = 0; x < w; x += step) {
+      if (isContentPixel((rowOff + x) * 4)) {
+        hits++;
+        if (hits >= minHits) return true;
+      }
+    }
+    return false;
+  };
+
+  const colHasContent = (x: number, yTop: number, yBot: number) => {
+    let hits = 0;
+    const minHits = Math.max(3, Math.floor((yBot - yTop) * 0.01));
+    const step = Math.max(1, Math.floor((yBot - yTop) / 160));
+    for (let y = yTop; y <= yBot; y += step) {
+      if (isContentPixel((y * w + x) * 4)) {
+        hits++;
+        if (hits >= minHits) return true;
+      }
+    }
+    return false;
+  };
+
+  let top = 0;
+  while (top < h - 10 && !rowHasContent(top)) top++;
+  let bottom = h - 1;
+  while (bottom > top + 10 && !rowHasContent(bottom)) bottom--;
+
+  let left = 0;
+  while (left < w - 10 && !colHasContent(left, top, bottom)) left++;
+  let right = w - 1;
+  while (right > left + 10 && !colHasContent(right, top, bottom)) right--;
+
+  const pad = 8;
+  top = Math.max(0, top - pad);
+  left = Math.max(0, left - pad);
+  bottom = Math.min(h - 1, bottom + pad);
+  right = Math.min(w - 1, right + pad);
+
+  const cropW = right - left + 1;
+  const cropH = bottom - top + 1;
+
+  if (cropW < w * 0.35 || cropH < h * 0.35 || (cropW >= w - 16 && cropH >= h - 16)) {
+    return canvas;
+  }
+
+  const trimmed = document.createElement('canvas');
+  trimmed.width = cropW;
+  trimmed.height = cropH;
+  const tCtx = trimmed.getContext('2d', { willReadFrequently: true });
+  if (!tCtx) return canvas;
+  tCtx.drawImage(canvas, left, top, cropW, cropH, 0, 0, cropW, cropH);
+  return trimmed;
+}
+
 function buildMrzStrip(
   origCanvas: HTMLCanvasElement,
   targetW: number,
@@ -233,21 +340,39 @@ function buildMrzStrip(
 
 /**
  * Prepares original, contrast-enhanced full-document, and dual MRZ-strip
- * canvases directly inside the browser.
+ * canvases directly inside the browser with support for coarse 90-degree
+ * rotation and arbitrary-angle fine deskewing.
  */
 export async function preprocessDocumentImage(
   input: ImageInput,
-  options: { preprocess?: boolean; rotation?: 0 | 90 | 180 | 270 } = {}
+  options: {
+    preprocess?: boolean;
+    rotation?: 0 | 90 | 180 | 270;
+    deskewDegrees?: number;
+  } = {}
 ): Promise<PreprocessedResult> {
-  const { preprocess = true, rotation = 0 } = options;
+  const { preprocess = true, rotation = 0, deskewDegrees = 0 } = options;
   const img = await loadImageElement(input);
 
   const srcW = img.naturalWidth || img.width;
   const srcH = img.naturalHeight || img.height;
 
-  const swapped = rotation === 90 || rotation === 270;
-  const rotatedW = swapped ? srcH : srcW;
-  const rotatedH = swapped ? srcW : srcH;
+  const totalDeg = rotation + deskewDegrees;
+  const hasFineSkew = Math.abs(deskewDegrees) >= 0.1;
+
+  let rotatedW: number;
+  let rotatedH: number;
+  if (!hasFineSkew) {
+    const swapped = rotation === 90 || rotation === 270;
+    rotatedW = swapped ? srcH : srcW;
+    rotatedH = swapped ? srcW : srcH;
+  } else {
+    const rad = (totalDeg * Math.PI) / 180;
+    const absCos = Math.abs(Math.cos(rad));
+    const absSin = Math.abs(Math.sin(rad));
+    rotatedW = Math.max(1, Math.round(srcW * absCos + srcH * absSin));
+    rotatedH = Math.max(1, Math.round(srcW * absSin + srcH * absCos));
+  }
 
   let scale = 1;
   if (rotatedW < 1600) {
@@ -256,25 +381,30 @@ export async function preprocessDocumentImage(
     scale = 2200 / rotatedW;
   }
 
-  const targetW = Math.round(rotatedW * scale);
-  const targetH = Math.round(rotatedH * scale);
-
-  const origCanvas = document.createElement('canvas');
-  origCanvas.width = targetW;
-  origCanvas.height = targetH;
+  let origCanvas = document.createElement('canvas');
+  origCanvas.width = Math.round(rotatedW * scale);
+  origCanvas.height = Math.round(rotatedH * scale);
   const origCtx = origCanvas.getContext('2d', { willReadFrequently: true });
   if (!origCtx) throw new Error('2D canvas context unavailable');
 
   origCtx.fillStyle = '#ffffff';
-  origCtx.fillRect(0, 0, targetW, targetH);
+  origCtx.fillRect(0, 0, origCanvas.width, origCanvas.height);
+  origCtx.imageSmoothingEnabled = true;
+  origCtx.imageSmoothingQuality = 'high';
   origCtx.save();
-  origCtx.translate(targetW / 2, targetH / 2);
-  origCtx.rotate((rotation * Math.PI) / 180);
-  const drawW = swapped ? targetH : targetW;
-  const drawH = swapped ? targetW : targetH;
+  origCtx.translate(origCanvas.width / 2, origCanvas.height / 2);
+  origCtx.rotate((totalDeg * Math.PI) / 180);
+  const drawW = Math.round(srcW * scale);
+  const drawH = Math.round(srcH * scale);
   origCtx.drawImage(img, -drawW / 2, -drawH / 2, drawW, drawH);
   origCtx.restore();
 
+  if (hasFineSkew) {
+    origCanvas = trimWhiteRotationMargins(origCanvas);
+  }
+
+  const targetW = origCanvas.width;
+  const targetH = origCanvas.height;
   const originalDataUrl = origCanvas.toDataURL('image/png');
 
   const enhCanvas = document.createElement('canvas');

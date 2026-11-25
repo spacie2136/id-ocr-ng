@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": [],
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "strict": true,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "declarationDir": "public/lib/types",
+    "rootDir": "src/scanner",
+    "outDir": "public/lib/types",
+    "noEmit": false
+  },
+  "include": ["src/scanner/**/*.ts"]
+}
