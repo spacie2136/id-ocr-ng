@@ -1,6 +1,10 @@
 import { computeCheckDigit } from '../scanner/mrzParser';
 
-export type SpecimenKind = 'passport_td3' | 'id_card_td1' | 'driver_license';
+export type SpecimenKind =
+  | 'passport_td3'
+  | 'id_card_td1'
+  | 'driver_license'
+  | 'specimen_watermark';
 
 function drawPortraitSilhouette(
   ctx: CanvasRenderingContext2D,
@@ -23,16 +27,35 @@ function drawPortraitSilhouette(
   ctx.clip();
 
   ctx.fillStyle = fgColor;
-  // Head
   ctx.beginPath();
   ctx.arc(x + w * 0.5, y + h * 0.36, w * 0.22, 0, Math.PI * 2);
   ctx.fill();
 
-  // Shoulders
   ctx.beginPath();
   ctx.ellipse(x + w * 0.5, y + h * 0.88, w * 0.38, h * 0.28, 0, Math.PI, 0);
   ctx.fill();
 
+  ctx.restore();
+}
+
+function drawHandwrittenSignature(ctx: CanvasRenderingContext2D, x: number, y: number) {
+  ctx.save();
+  ctx.strokeStyle = '#0F172A';
+  ctx.lineWidth = 3.2;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  ctx.moveTo(x, y + 36);
+  ctx.bezierCurveTo(x + 18, y + 4, x + 32, y + 48, x + 52, y + 18);
+  ctx.bezierCurveTo(x + 68, y - 4, x + 76, y + 42, x + 98, y + 26);
+  ctx.bezierCurveTo(x + 116, y + 12, x + 134, y + 38, x + 158, y + 22);
+  ctx.bezierCurveTo(x + 182, y + 10, x + 210, y + 34, x + 258, y + 26);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(x + 12, y + 46);
+  ctx.quadraticCurveTo(x + 140, y + 36, x + 245, y + 42);
+  ctx.stroke();
   ctx.restore();
 }
 
@@ -50,8 +73,8 @@ function canvasToFile(canvas: HTMLCanvasElement, filename: string): Promise<File
 
 /**
  * Dynamically renders a realistic synthetic Passport (TD3), National ID Card (TD1),
- * or Driver's License onto an HTML5 Canvas and returns it as a PNG File so the
- * browser OCR engine genuinely reads pixels from the image.
+ * Driver's License, or Watermarked Specimen Document onto an HTML5 Canvas and returns
+ * it as a PNG File so the browser OCR engine genuinely reads pixels from the image.
  */
 export async function generateTestDocumentFile(kind: SpecimenKind): Promise<File> {
   const canvas = document.createElement('canvas');
@@ -62,16 +85,13 @@ export async function generateTestDocumentFile(kind: SpecimenKind): Promise<File
     canvas.width = 1440;
     canvas.height = 980;
 
-    // Clean passport page background
     ctx.fillStyle = '#F8FAFC';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // Subtle security border
     ctx.strokeStyle = '#94A3B8';
     ctx.lineWidth = 4;
     ctx.strokeRect(24, 24, canvas.width - 48, canvas.height - 48);
 
-    // Header band
     ctx.fillStyle = '#0F172A';
     ctx.font = 'bold 34px "Plus Jakarta Sans", Arial, sans-serif';
     ctx.fillText('PASSPORT   PASSEPORT   PASAPORTE', 68, 92);
@@ -81,10 +101,8 @@ export async function generateTestDocumentFile(kind: SpecimenKind): Promise<File
     ctx.fillText('TYPE: P', 1020, 88);
     ctx.fillText('COUNTRY: GBR', 1170, 88);
 
-    // Portrait box
     drawPortraitSilhouette(ctx, 68, 145, 310, 400, '#E2E8F0', '#475569');
 
-    // Visual Inspection Zone fields (clear high-contrast sans-serif)
     const fields: Array<[string, string, number, number]> = [
       ['Surname / Nom', 'BENNETT', 430, 175],
       ['Given names / Prénoms', 'CLAIRE LOUISE', 430, 260],
@@ -109,14 +127,12 @@ export async function generateTestDocumentFile(kind: SpecimenKind): Promise<File
       ctx.fillText(value, x, y + 34);
     }
 
-    // MRZ strip background
     ctx.fillStyle = '#FFFFFF';
     ctx.fillRect(36, 700, canvas.width - 72, 236);
     ctx.strokeStyle = '#CBD5E1';
     ctx.lineWidth = 2;
     ctx.strokeRect(36, 700, canvas.width - 72, 236);
 
-    // Build valid ICAO 9303 TD3 44-char lines
     const docNum = 'P84920173';
     const docCheck = computeCheckDigit(docNum);
     const dob = '910514';
@@ -138,6 +154,98 @@ export async function generateTestDocumentFile(kind: SpecimenKind): Promise<File
     ctx.fillText(line2, 66, 875);
 
     return canvasToFile(canvas, 'specimen-passport-td3.png');
+  }
+
+  if (kind === 'specimen_watermark') {
+    canvas.width = 1440;
+    canvas.height = 980;
+
+    ctx.fillStyle = '#F8FAFC';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.strokeStyle = '#94A3B8';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(24, 24, canvas.width - 48, canvas.height - 48);
+
+    ctx.fillStyle = '#0F172A';
+    ctx.font = 'bold 34px "Plus Jakarta Sans", Arial, sans-serif';
+    ctx.fillText('REISEPASS   PASSPORT   SPECIMEN', 68, 92);
+
+    ctx.fillStyle = '#334155';
+    ctx.font = '600 22px "DM Sans", Arial, sans-serif';
+    ctx.fillText('TYPE: P', 1020, 88);
+    ctx.fillText('COUNTRY: D', 1170, 88);
+
+    drawPortraitSilhouette(ctx, 68, 145, 310, 400, '#E2E8F0', '#475569');
+
+    const fields: Array<[string, string, number, number]> = [
+      ['Name / Surname', 'MUSTERMANN', 430, 175],
+      ['Vorname / Given names', 'ERIKA', 430, 260],
+      ['Staatsangehörigkeit / Nationality', 'DEUTSCH', 430, 345],
+      ['Geburtsdatum / Date of birth', '12.08.1983', 430, 430],
+      ['Geschlecht / Sex', 'F', 880, 430],
+      ['Geburtsort / Place of birth', 'BERLIN', 1020, 430],
+      ['Pass-Nr. / Passport No.', 'C01X00T47', 980, 175],
+      ['Ausstellungsdatum / Date of issue', '01.03.2023', 430, 515],
+      ['Gültig bis / Date of expiry', '28.02.2033', 880, 515],
+    ];
+
+    for (const [label, value, x, y] of fields) {
+      ctx.fillStyle = '#475569';
+      ctx.font = '600 18px Arial, sans-serif';
+      ctx.fillText(label, x, y);
+
+      ctx.fillStyle = '#0F172A';
+      ctx.font = 'bold 28px Arial, sans-serif';
+      ctx.fillText(value, x, y + 34);
+    }
+
+    // Holder's signature label + handwritten cursive strokes
+    ctx.fillStyle = '#475569';
+    ctx.font = '600 18px Arial, sans-serif';
+    ctx.fillText("Unterschrift / Holder's signature", 430, 595);
+    drawHandwrittenSignature(ctx, 438, 610);
+
+    // Diagonal crimson MUSTER / SPECIMEN watermark overlay
+    ctx.save();
+    ctx.translate(930, 385);
+    ctx.rotate(-0.38);
+    ctx.strokeStyle = 'rgba(220, 38, 38, 0.78)';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(-220, -48, 440, 82);
+    ctx.fillStyle = 'rgba(220, 38, 38, 0.85)';
+    ctx.font = 'bold 46px Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('MUSTER · SPECIMEN', 0, 10);
+    ctx.restore();
+
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(36, 700, canvas.width - 72, 236);
+    ctx.strokeStyle = '#CBD5E1';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(36, 700, canvas.width - 72, 236);
+
+    const docNum = 'C01X00T47';
+    const docCheck = computeCheckDigit(docNum);
+    const dob = '830812';
+    const dobCheck = computeCheckDigit(dob);
+    const exp = '330228';
+    const expCheck = computeCheckDigit(exp);
+    const personal = '<<<<<<<<<<<<<<';
+    const personalCheck = computeCheckDigit(personal);
+    const compositeInput =
+      docNum + docCheck + dob + dobCheck + exp + expCheck + personal + personalCheck;
+    const compositeCheck = computeCheckDigit(compositeInput);
+
+    const line1 = 'P<D<<MUSTERMANN<<ERIKA<<<<<<<<<<<<<<<<<<<<<<'.slice(0, 44);
+    const line2 = `${docNum}${docCheck}D<<${dob}${dobCheck}F${exp}${expCheck}${personal}${personalCheck}${compositeCheck}`;
+
+    ctx.fillStyle = '#000000';
+    ctx.font = '600 41px "Courier New", monospace';
+    ctx.fillText(line1, 66, 795);
+    ctx.fillText(line2, 66, 875);
+
+    return canvasToFile(canvas, 'specimen-watermark-muster.png');
   }
 
   if (kind === 'id_card_td1') {
@@ -185,7 +293,6 @@ export async function generateTestDocumentFile(kind: SpecimenKind): Promise<File
       ctx.fillText(value, x, y + 32);
     }
 
-    // TD1 MRZ box (3 lines x 30 chars)
     ctx.fillStyle = '#FFFFFF';
     ctx.fillRect(36, 540, canvas.width - 72, 276);
     ctx.strokeStyle = '#CBD5E1';
@@ -216,7 +323,6 @@ export async function generateTestDocumentFile(kind: SpecimenKind): Promise<File
     return canvasToFile(canvas, 'specimen-id-card-td1.png');
   }
 
-  // Driver's License (Visual Inspection Zone only - no MRZ)
   canvas.width = 1360;
   canvas.height = 860;
 

@@ -1,26 +1,38 @@
 import { createWorker, PSM, type Block, type Symbol as TessSymbol, type Worker } from 'tesseract.js';
 import { resolveCountryName } from './countries';
 import {
-  loadImageElement,
+  loadImageSurface,
   preprocessDocumentImage,
   sampleDownscaledGrayscale,
 } from './imagePreprocessor';
+import { extractPortraitAndSignature } from './mediaExtractor';
 import { parseMrzFromText } from './mrzParser';
 import { analyzeDocumentOrientation } from './orientation';
 import { mergeDocumentSides } from './pairMerger';
+import { detectPdf417Barcode } from './pdf417Decoder';
 import {
   detectDocumentQuad,
   orderQuadCorners,
   warpDocumentPerspective,
 } from './perspective';
+import {
+  isScanAbortedError,
+  PreprocessWorkerClient,
+  raceWithAbort,
+  throwIfScanAborted,
+} from './preprocessWorker';
 import { assessImageQuality, QualityGateError } from './qualityGate';
+import { crossValidateMrzAndViz, detectSpecimenWatermark } from './specimenValidator';
 import type {
+  BarcodeParsedData,
+  CroppedRegionInfo,
   DocumentType,
   ExtractedIdentity,
   FieldSource,
   GrayscaleBuffer,
   ImageInput,
   ImageQualityReport,
+  ImageSurface,
   MergedDocumentResult,
   MrzOcrModel,
   MrzParsedData,
@@ -30,6 +42,7 @@ import type {
   PreprocessedResult,
   ScanProgress,
   ScannerOptions,
+  SpecimenDetectionResult,
   TesseractWorkerConfig,
   VizLanguageMode,
   VizLineBox,
@@ -69,6 +82,7 @@ function computeIsExpired(expiryIso: string | null): boolean | null {
 
 function inferDocumentType(
   mrz: MrzParsedData | null,
+  barcode: BarcodeParsedData | null,
   vizHint: DocumentType | null
 ): DocumentType {
   if (mrz) {
@@ -80,6 +94,12 @@ function inferDocumentType(
     }
     if (code.startsWith('I') || code.startsWith('A') || code.startsWith('C')) {
       return 'id_card';
+    }
+  }
+  if (barcode?.aamva) {
+    if (barcode.aamva.subfileType === 'ID') return 'id_card';
+    if (barcode.aamva.subfileType === 'DL' || barcode.aamva.licenseClass) {
+      return 'driver_license';
     }
   }
   return vizHint ?? 'unknown';
@@ -117,18 +137,21 @@ function pickField<T>(
   mrzVal: T | null | undefined,
   vizVal: T | null | undefined,
   fieldKey: string,
-  sources: Record<string, FieldSource>
+  sources: Record<string, FieldSource>,
+  barcodeVal?: T | null | undefined
 ): T | null {
   const hasMrz = mrzVal !== null && mrzVal !== undefined && String(mrzVal).trim() !== '';
+  const hasBarcode =
+    barcodeVal !== null && barcodeVal !== undefined && String(barcodeVal).trim() !== '';
   const hasViz = vizVal !== null && vizVal !== undefined && String(vizVal).trim() !== '';
 
-  if (hasMrz && hasViz) {
-    sources[fieldKey] = 'MRZ+VIZ';
+  if (hasMrz) {
+    sources[fieldKey] = hasViz ? 'MRZ+VIZ' : 'MRZ';
     return mrzVal as T;
   }
-  if (hasMrz) {
-    sources[fieldKey] = 'MRZ';
-    return mrzVal as T;
+  if (hasBarcode) {
+    sources[fieldKey] = hasViz ? 'BARCODE+VIZ' : 'BARCODE';
+    return barcodeVal as T;
   }
   if (hasViz) {
     sources[fieldKey] = 'VIZ';
@@ -139,11 +162,13 @@ function pickField<T>(
 
 function pickSingleSideName(
   mrzVal: string | null | undefined,
+  barcodeVal: string | null | undefined,
   vizVal: string | null | undefined,
   fieldKey: string,
   sources: Record<string, FieldSource>
 ): string | null {
   const m = mrzVal?.trim() || null;
+  const b = barcodeVal?.trim() || null;
   const v = vizVal?.trim() || null;
 
   if (m && v) {
@@ -168,6 +193,12 @@ function pickSingleSideName(
     sources[fieldKey] = 'MRZ';
     return m;
   }
+
+  if (b) {
+    sources[fieldKey] = v ? 'BARCODE+VIZ' : 'BARCODE';
+    return b;
+  }
+
   if (v) {
     sources[fieldKey] = 'VIZ';
     return v;
@@ -273,6 +304,7 @@ function normalizeConfusableChars(val: string): string {
 
 function reconcileDocumentNumber(
   mrz: MrzParsedData | null,
+  barcodeDocNum: string | null | undefined,
   vizDocNum: string | null,
   sources: Record<string, FieldSource>
 ): string | null {
@@ -290,7 +322,7 @@ function reconcileDocumentNumber(
       return vizNorm;
     }
   }
-  return pickField(mrz?.documentNumber, vizDocNum, 'documentNumber', sources);
+  return pickField(mrz?.documentNumber, vizDocNum, 'documentNumber', sources, barcodeDocNum);
 }
 
 function extractVizLineBoxes(blocks: Block[] | null): VizLineBox[] {
@@ -488,9 +520,9 @@ function inspectInkBox(
     d(0, 2) >= 0.38 &&
     d(1, 0) <= 0.28 &&
     d(1, 2) <= 0.22 &&
-    d(1, 1) >= 0.30 &&
+    d(1, 1) >= 0.3 &&
     d(2, 0) >= 0.38 &&
-    d(2, 1) >= 0.30 &&
+    d(2, 1) >= 0.3 &&
     d(2, 2) >= 0.25;
 
   return { empty: false, gw, gh, isChevron, isThinBar, isNine, isZee };
@@ -769,6 +801,7 @@ function scoreMrzCandidate(m: MrzParsedData): number {
 interface OrientationPassResult {
   coarse: 0 | 90 | 180 | 270;
   preprocessed: PreprocessedResult;
+  usedWorkerPreprocess: boolean;
   cleanedFullText: string;
   vizLineBoxes: VizLineBox[];
   vizData: VizParsedData;
@@ -857,6 +890,8 @@ export class DocumentScanner {
   private mrzWorkerConfigKey: string | null = null;
   private mrzOcrbFailed = false;
 
+  private preprocessWorker = new PreprocessWorkerClient();
+
   private defaultWorkerConfig: TesseractWorkerConfig;
   private activeStageCallback: ((p: ScanProgress) => void) | null = null;
   private activeStage: ScanProgress['stage'] = 'initializing_ocr';
@@ -871,6 +906,10 @@ export class DocumentScanner {
       corePath: override.corePath ?? this.defaultWorkerConfig.corePath,
       langPath: override.langPath ?? this.defaultWorkerConfig.langPath,
       workerBlobURL: override.workerBlobURL ?? this.defaultWorkerConfig.workerBlobURL,
+      useWorkerPreprocessing:
+        override.useWorkerPreprocessing ??
+        this.defaultWorkerConfig.useWorkerPreprocessing ??
+        true,
       mrzModel: override.mrzModel ?? this.defaultWorkerConfig.mrzModel ?? 'ocrb',
       mrzLanguage: override.mrzLanguage ?? this.defaultWorkerConfig.mrzLanguage,
       mrzLangPath: override.mrzLangPath ?? this.defaultWorkerConfig.mrzLangPath,
@@ -879,6 +918,31 @@ export class DocumentScanner {
       vizLanguages: override.vizLanguages ?? this.defaultWorkerConfig.vizLanguages,
       vizLanguageMap: override.vizLanguageMap ?? this.defaultWorkerConfig.vizLanguageMap,
     };
+  }
+
+  private abortInFlightWorkers(): void {
+    this.preprocessWorker.abortActiveWorker();
+
+    if (this.worker) {
+      const w = this.worker;
+      this.worker = null;
+      this.workerLang = null;
+      this.workerConfigKey = null;
+      void w.terminate().catch(() => {});
+    }
+    if (this.vizNativeWorker) {
+      const w = this.vizNativeWorker;
+      this.vizNativeWorker = null;
+      this.vizNativeLang = null;
+      this.vizNativeConfigKey = null;
+      void w.terminate().catch(() => {});
+    }
+    if (this.mrzWorker) {
+      const w = this.mrzWorker;
+      this.mrzWorker = null;
+      this.mrzWorkerConfigKey = null;
+      void w.terminate().catch(() => {});
+    }
   }
 
   private createLoggerOption(stageFilter: 'full' | 'native' | 'mrz') {
@@ -918,8 +982,10 @@ export class DocumentScanner {
   private async ensureWorker(
     language: string,
     workerConfig: TesseractWorkerConfig,
-    onProgress?: (p: ScanProgress) => void
+    onProgress?: (p: ScanProgress) => void,
+    signal?: AbortSignal
   ): Promise<Worker> {
+    throwIfScanAborted(signal);
     this.activeStageCallback = onProgress ?? null;
 
     const mergedConfig = this.mergeWorkerConfig(workerConfig);
@@ -939,14 +1005,18 @@ export class DocumentScanner {
     }
 
     if (this.worker) {
-      await this.worker.terminate();
+      const staleWorker = this.worker;
       this.worker = null;
+      this.workerLang = null;
+      this.workerConfigKey = null;
+      await raceWithAbort(staleWorker.terminate(), signal, () => this.abortInFlightWorkers());
     }
 
+    throwIfScanAborted(signal);
     this.activeStage = 'initializing_ocr';
     onProgress?.({
       stage: 'initializing_ocr',
-      progress: 12,
+      progress: 14,
       message: 'Initializing client-side Tesseract OCR engine…',
     });
 
@@ -961,7 +1031,7 @@ export class DocumentScanner {
       tesseractWorkerOptions.workerBlobURL = mergedConfig.workerBlobURL;
     }
 
-    const worker = await createWorker(
+    const createPromise = createWorker(
       language,
       1,
       tesseractWorkerOptions,
@@ -969,7 +1039,15 @@ export class DocumentScanner {
         load_system_dawg: '0',
         load_freq_dawg: '0',
       }
-    );
+    ).then((created) => {
+      if (signal?.aborted) {
+        void created.terminate().catch(() => {});
+      }
+      return created;
+    });
+
+    const worker = await raceWithAbort(createPromise, signal, () => this.abortInFlightWorkers());
+    throwIfScanAborted(signal);
 
     this.worker = worker;
     this.workerLang = language;
@@ -980,8 +1058,10 @@ export class DocumentScanner {
   private async ensureNativeVizWorker(
     nativeLanguage: string,
     workerConfig: TesseractWorkerConfig,
-    onProgress?: (p: ScanProgress) => void
+    onProgress?: (p: ScanProgress) => void,
+    signal?: AbortSignal
   ): Promise<Worker | null> {
+    throwIfScanAborted(signal);
     this.activeStageCallback = onProgress ?? null;
     const mergedConfig = this.mergeWorkerConfig(workerConfig);
     const configKey = JSON.stringify({
@@ -1004,12 +1084,15 @@ export class DocumentScanner {
     }
 
     if (this.vizNativeWorker) {
-      await this.vizNativeWorker.terminate();
+      const stale = this.vizNativeWorker;
       this.vizNativeWorker = null;
       this.vizNativeLang = null;
+      this.vizNativeConfigKey = null;
+      await raceWithAbort(stale.terminate(), signal, () => this.abortInFlightWorkers());
     }
 
     try {
+      throwIfScanAborted(signal);
       this.activeStage = 'recognizing_viz_native';
       onProgress?.({
         stage: 'recognizing_viz_native',
@@ -1027,7 +1110,7 @@ export class DocumentScanner {
         nativeOptions.workerBlobURL = mergedConfig.workerBlobURL;
       }
 
-      const worker = await createWorker(
+      const createPromise = createWorker(
         nativeLanguage,
         1,
         nativeOptions,
@@ -1035,13 +1118,22 @@ export class DocumentScanner {
           load_system_dawg: '0',
           load_freq_dawg: '0',
         }
-      );
+      ).then((created) => {
+        if (signal?.aborted) {
+          void created.terminate().catch(() => {});
+        }
+        return created;
+      });
+
+      const worker = await raceWithAbort(createPromise, signal, () => this.abortInFlightWorkers());
+      throwIfScanAborted(signal);
 
       this.vizNativeWorker = worker;
       this.vizNativeLang = nativeLanguage;
       this.vizNativeConfigKey = configKey;
       return worker;
-    } catch {
+    } catch (err) {
+      if (isScanAbortedError(err)) throw err;
       this.vizNativeFailedLangs.add(`${nativeLanguage}:${configKey}`);
       return null;
     }
@@ -1050,8 +1142,10 @@ export class DocumentScanner {
   private async ensureMrzWorker(
     fallbackWorker: Worker,
     workerConfig: TesseractWorkerConfig,
-    onProgress?: (p: ScanProgress) => void
+    onProgress?: (p: ScanProgress) => void,
+    signal?: AbortSignal
   ): Promise<{ worker: Worker; modelUsed: MrzOcrModel }> {
+    throwIfScanAborted(signal);
     this.activeStageCallback = onProgress ?? null;
     const merged = this.mergeWorkerConfig(workerConfig);
     const requestedModel: MrzOcrModel = merged.mrzModel ?? 'ocrb';
@@ -1082,15 +1176,18 @@ export class DocumentScanner {
     }
 
     if (this.mrzWorker) {
-      await this.mrzWorker.terminate();
+      const stale = this.mrzWorker;
       this.mrzWorker = null;
+      this.mrzWorkerConfigKey = null;
+      await raceWithAbort(stale.terminate(), signal, () => this.abortInFlightWorkers());
     }
 
     try {
+      throwIfScanAborted(signal);
       this.activeStage = 'initializing_ocr';
       onProgress?.({
         stage: 'initializing_ocr',
-        progress: 14,
+        progress: 16,
         message: 'Loading specialized OCR-B MRZ recognition model…',
       });
 
@@ -1105,7 +1202,7 @@ export class DocumentScanner {
         mrzOptions.workerBlobURL = merged.workerBlobURL;
       }
 
-      const worker = await createWorker(
+      const createPromise = createWorker(
         mrzLang,
         1,
         mrzOptions,
@@ -1113,35 +1210,82 @@ export class DocumentScanner {
           load_system_dawg: '0',
           load_freq_dawg: '0',
         }
-      );
+      ).then((created) => {
+        if (signal?.aborted) {
+          void created.terminate().catch(() => {});
+        }
+        return created;
+      });
+
+      const worker = await raceWithAbort(createPromise, signal, () => this.abortInFlightWorkers());
+      throwIfScanAborted(signal);
 
       this.mrzWorker = worker;
       this.mrzWorkerConfigKey = mrzConfigKey;
       this.mrzOcrbFailed = false;
       return { worker, modelUsed: 'ocrb' };
-    } catch {
+    } catch (err) {
+      if (isScanAbortedError(err)) throw err;
       this.mrzWorkerConfigKey = mrzConfigKey;
       this.mrzOcrbFailed = true;
       return { worker: fallbackWorker, modelUsed: 'standard' };
     }
   }
 
+  private async preprocessWithWorkerOrFallback(
+    surface: ImageSurface,
+    opts: {
+      preprocess: boolean;
+      rotation: 0 | 90 | 180 | 270;
+      deskewDegrees: number;
+    },
+    useWorker: boolean,
+    signal?: AbortSignal
+  ): Promise<{ preprocessed: PreprocessedResult; viaWorker: boolean }> {
+    throwIfScanAborted(signal);
+
+    if (useWorker && this.preprocessWorker.isAvailable()) {
+      const workerResult = await this.preprocessWorker.preprocessDocument(surface, opts, signal);
+      if (workerResult) {
+        return { preprocessed: workerResult, viaWorker: true };
+      }
+    }
+
+    throwIfScanAborted(signal);
+    const fallbackResult = await raceWithAbort(
+      preprocessDocumentImage(surface, opts),
+      signal
+    );
+    return { preprocessed: fallbackResult, viaWorker: false };
+  }
+
   private async runOrientationPass(
-    surface: HTMLImageElement | HTMLCanvasElement,
+    surface: ImageSurface,
     vizWorker: Worker,
     workerConfig: TesseractWorkerConfig,
     coarse: 0 | 90 | 180 | 270,
     deskewDegrees: number,
     preprocess: boolean,
     enhanceMrzPass: boolean,
+    useWorkerPreprocess: boolean,
     onProgress?: (p: ScanProgress) => void,
-    emitProgress = true
+    emitProgress = true,
+    signal?: AbortSignal
   ): Promise<OrientationPassResult> {
-    const preprocessed = await preprocessDocumentImage(surface, {
-      preprocess,
-      rotation: coarse,
-      deskewDegrees,
-    });
+    throwIfScanAborted(signal);
+
+    const { preprocessed, viaWorker } = await this.preprocessWithWorkerOrFallback(
+      surface,
+      {
+        preprocess,
+        rotation: coarse,
+        deskewDegrees,
+      },
+      useWorkerPreprocess,
+      signal
+    );
+
+    throwIfScanAborted(signal);
 
     if (emitProgress) {
       this.activeStage = 'recognizing_full';
@@ -1152,24 +1296,41 @@ export class DocumentScanner {
       });
     }
 
-    await vizWorker.setParameters({
-      tessedit_pageseg_mode: PSM.SPARSE_TEXT,
-      tessedit_char_whitelist: '',
-    });
+    await raceWithAbort(
+      vizWorker.setParameters({
+        tessedit_pageseg_mode: PSM.SPARSE_TEXT,
+        tessedit_char_whitelist: '',
+      }),
+      signal,
+      () => this.abortInFlightWorkers()
+    );
 
     const fullInputUrl = preprocess
       ? preprocessed.enhancedDataUrl
       : preprocessed.originalDataUrl;
-    let fullResult = await vizWorker.recognize(fullInputUrl, {}, { blocks: true });
+    let fullResult = await raceWithAbort(
+      vizWorker.recognize(fullInputUrl, {}, { blocks: true }),
+      signal,
+      () => this.abortInFlightWorkers()
+    );
     let fullText = fullResult.data.text || '';
     let fullConfidence = fullResult.data.confidence || 0;
 
     if (fullText.trim().split(/\r?\n/).filter(Boolean).length < 2) {
-      await vizWorker.setParameters({
-        tessedit_pageseg_mode: PSM.AUTO,
-        tessedit_char_whitelist: '',
-      });
-      const autoResult = await vizWorker.recognize(fullInputUrl, {}, { blocks: true });
+      throwIfScanAborted(signal);
+      await raceWithAbort(
+        vizWorker.setParameters({
+          tessedit_pageseg_mode: PSM.AUTO,
+          tessedit_char_whitelist: '',
+        }),
+        signal,
+        () => this.abortInFlightWorkers()
+      );
+      const autoResult = await raceWithAbort(
+        vizWorker.recognize(fullInputUrl, {}, { blocks: true }),
+        signal,
+        () => this.abortInFlightWorkers()
+      );
       if ((autoResult.data.text || '').trim().length > fullText.trim().length) {
         fullResult = autoResult;
         fullText = autoResult.data.text || '';
@@ -1190,7 +1351,8 @@ export class DocumentScanner {
       workerConfig.mrzModel ?? this.defaultWorkerConfig.mrzModel ?? 'ocrb';
 
     if (enhanceMrzPass) {
-      const mrzResolved = await this.ensureMrzWorker(vizWorker, workerConfig, onProgress);
+      throwIfScanAborted(signal);
+      const mrzResolved = await this.ensureMrzWorker(vizWorker, workerConfig, onProgress, signal);
       const mrzWorker = mrzResolved.worker;
       mrzModelUsed = mrzResolved.modelUsed;
 
@@ -1206,13 +1368,22 @@ export class DocumentScanner {
         });
       }
 
-      await mrzWorker.setParameters({
-        tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
-        tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<',
-      });
+      await raceWithAbort(
+        mrzWorker.setParameters({
+          tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
+          tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<',
+        }),
+        signal,
+        () => this.abortInFlightWorkers()
+      );
 
       const runMrzStrip = async (stripUrl: string, stripGray: GrayscaleBuffer) => {
-        const mrzResult = await mrzWorker.recognize(stripUrl, {}, { blocks: true });
+        throwIfScanAborted(signal);
+        const mrzResult = await raceWithAbort(
+          mrzWorker.recognize(stripUrl, {}, { blocks: true }),
+          signal,
+          () => this.abortInFlightWorkers()
+        );
         const rawTxt = (mrzResult.data.text || '').trim();
         if (rawTxt && !mrzRawText) mrzRawText = rawTxt;
 
@@ -1275,6 +1446,7 @@ export class DocumentScanner {
     return {
       coarse,
       preprocessed,
+      usedWorkerPreprocess: viaWorker,
       cleanedFullText,
       vizLineBoxes,
       vizData,
@@ -1288,25 +1460,42 @@ export class DocumentScanner {
   }
 
   private async runLightweightProbe(
-    surface: HTMLImageElement | HTMLCanvasElement,
+    surface: ImageSurface,
     worker: Worker,
     coarse: 0 | 90 | 180 | 270,
     deskewDegrees: number,
-    preprocess: boolean
-  ): Promise<number> {
-    const preprocessed = await preprocessDocumentImage(surface, {
-      preprocess,
-      rotation: coarse,
-      deskewDegrees,
-    });
+    preprocess: boolean,
+    useWorkerPreprocess: boolean,
+    signal?: AbortSignal
+  ): Promise<{ score: number; viaWorker: boolean }> {
+    throwIfScanAborted(signal);
 
-    await worker.setParameters({
-      tessedit_pageseg_mode: PSM.SPARSE_TEXT,
-      tessedit_char_whitelist: '',
-    });
+    const { preprocessed, viaWorker } = await this.preprocessWithWorkerOrFallback(
+      surface,
+      {
+        preprocess,
+        rotation: coarse,
+        deskewDegrees,
+      },
+      useWorkerPreprocess,
+      signal
+    );
+
+    await raceWithAbort(
+      worker.setParameters({
+        tessedit_pageseg_mode: PSM.SPARSE_TEXT,
+        tessedit_char_whitelist: '',
+      }),
+      signal,
+      () => this.abortInFlightWorkers()
+    );
 
     const inputUrl = preprocess ? preprocessed.enhancedDataUrl : preprocessed.originalDataUrl;
-    const res = await worker.recognize(inputUrl, {}, { blocks: true });
+    const res = await raceWithAbort(
+      worker.recognize(inputUrl, {}, { blocks: true }),
+      signal,
+      () => this.abortInFlightWorkers()
+    );
     const rawText = res.data.text || '';
     const conf = res.data.confidence || 0;
     const boxes = extractVizLineBoxes(res.data.blocks);
@@ -1314,7 +1503,10 @@ export class DocumentScanner {
     const viz = parseVizText(cleaned, boxes);
     const mrz = parseMrzFromText(rawText);
 
-    return scoreOrientationPass(mrz, viz, conf, cleaned);
+    return {
+      score: scoreOrientationPass(mrz, viz, conf, cleaned),
+      viaWorker,
+    };
   }
 
   async scan(input: ImageInput, options: ScannerOptions = {}): Promise<ExtractedIdentity> {
@@ -1323,6 +1515,10 @@ export class DocumentScanner {
       language = 'eng',
       preprocess = true,
       enhanceMrzPass = true,
+      enableBarcodePass = true,
+      extractPortrait = true,
+      extractSignature = true,
+      detectSpecimen = true,
       perspectiveCorrection = true,
       corners: manualCorners,
       rotation = 0,
@@ -1331,10 +1527,12 @@ export class DocumentScanner {
       enforceQualityGate = false,
       qualityGateOptions,
       includePreviews = true,
+      signal,
       workerPath,
       corePath,
       langPath,
       workerBlobURL,
+      useWorkerPreprocessing,
       mrzModel,
       mrzLanguage,
       mrzLangPath,
@@ -1345,11 +1543,14 @@ export class DocumentScanner {
       onProgress,
     } = options;
 
+    throwIfScanAborted(signal);
+
     const workerConfig = this.mergeWorkerConfig({
       workerPath,
       corePath,
       langPath,
       workerBlobURL,
+      useWorkerPreprocessing,
       mrzModel,
       mrzLanguage,
       mrzLangPath,
@@ -1358,6 +1559,9 @@ export class DocumentScanner {
       vizLanguages,
       vizLanguageMap,
     });
+
+    const useWorker =
+      workerConfig.useWorkerPreprocessing !== false && this.preprocessWorker.isAvailable();
 
     const vizStrategy = resolveVizPassStrategy({
       language,
@@ -1380,452 +1584,737 @@ export class DocumentScanner {
           : 'Preprocessing image & isolating MRZ region…',
     });
 
-    const rawImg = await loadImageElement(input);
-    let workingSurface: HTMLImageElement | HTMLCanvasElement = rawImg;
-    let perspectiveInfo: PerspectiveInfo | undefined;
+    let ownedBitmap: ImageBitmap | null = null;
+    let warpedBitmap: ImageBitmap | null = null;
+    let usedWorkerPreprocessing = false;
 
-    if (manualCorners) {
-      onProgress?.({
-        stage: 'detecting_perspective',
-        progress: 9,
-        message: 'Applying 4-corner perspective rectification…',
-      });
-      const ordered = orderQuadCorners([
-        manualCorners.topLeft,
-        manualCorners.topRight,
-        manualCorners.bottomRight,
-        manualCorners.bottomLeft,
-      ]);
-      workingSurface = warpDocumentPerspective(rawImg, ordered);
-      const area =
-        Math.abs(
-          (ordered.topLeft.x * ordered.topRight.y - ordered.topRight.x * ordered.topLeft.y) +
-            (ordered.topRight.x * ordered.bottomRight.y - ordered.bottomRight.x * ordered.topRight.y) +
-            (ordered.bottomRight.x * ordered.bottomLeft.y - ordered.bottomLeft.x * ordered.bottomRight.y) +
-            (ordered.bottomLeft.x * ordered.topLeft.y - ordered.topLeft.x * ordered.bottomLeft.y)
-        ) / 2;
-      perspectiveInfo = {
-        applied: true,
-        autoDetected: false,
-        corners: ordered,
-        sourceQuadAreaRatio: Math.round(area * 1000) / 1000,
-      };
-    } else if (perspectiveCorrection) {
-      onProgress?.({
-        stage: 'detecting_perspective',
-        progress: 9,
-        message: 'Detecting document borders for perspective correction…',
-      });
-      const detected = detectDocumentQuad(rawImg);
-      if (detected) {
-        workingSurface = warpDocumentPerspective(rawImg, detected.corners);
-        perspectiveInfo = detected;
-      } else {
-        perspectiveInfo = {
-          applied: false,
-          autoDetected: true,
-          corners: {
-            topLeft: { x: 0, y: 0 },
-            topRight: { x: 1, y: 0 },
-            bottomRight: { x: 1, y: 1 },
-            bottomLeft: { x: 0, y: 1 },
-          },
-          sourceQuadAreaRatio: 1,
-        };
-      }
-    }
+    try {
+      const loaded = await raceWithAbort(loadImageSurface(input, useWorker), signal);
+      const rawSurface = loaded.surface;
+      ownedBitmap = loaded.ownedBitmap;
+      throwIfScanAborted(signal);
 
-    let qualityReport: ImageQualityReport | undefined;
-    if (includeQualityReport || enforceQualityGate) {
-      if (enforceQualityGate) {
+      let workingSurface: ImageSurface = rawSurface;
+      let perspectiveInfo: PerspectiveInfo | undefined;
+
+      if (manualCorners) {
         onProgress?.({
-          stage: 'quality_check',
-          progress: 11,
-          message: 'Evaluating sharpness, glare & exposure quality gate…',
+          stage: 'detecting_perspective',
+          progress: 8,
+          message: 'Applying 4-corner perspective rectification…',
         });
+        const ordered = orderQuadCorners([
+          manualCorners.topLeft,
+          manualCorners.topRight,
+          manualCorners.bottomRight,
+          manualCorners.bottomLeft,
+        ]);
+
+        if (useWorker) {
+          const workerWarped = await this.preprocessWorker.warpPerspective(
+            rawSurface,
+            ordered,
+            signal
+          );
+          if (workerWarped) {
+            warpedBitmap = workerWarped;
+            workingSurface = workerWarped;
+            usedWorkerPreprocessing = true;
+          } else {
+            workingSurface = warpDocumentPerspective(rawSurface, ordered);
+          }
+        } else {
+          workingSurface = warpDocumentPerspective(rawSurface, ordered);
+        }
+
+        const area =
+          Math.abs(
+            (ordered.topLeft.x * ordered.topRight.y - ordered.topRight.x * ordered.topLeft.y) +
+              (ordered.topRight.x * ordered.bottomRight.y - ordered.bottomRight.x * ordered.topRight.y) +
+              (ordered.bottomRight.x * ordered.bottomLeft.y - ordered.bottomLeft.x * ordered.bottomRight.y) +
+              (ordered.bottomLeft.x * ordered.topLeft.y - ordered.topLeft.x * ordered.bottomLeft.y)
+          ) / 2;
+        perspectiveInfo = {
+          applied: true,
+          autoDetected: false,
+          corners: ordered,
+          sourceQuadAreaRatio: Math.round(area * 1000) / 1000,
+        };
+      } else if (perspectiveCorrection) {
+        onProgress?.({
+          stage: 'detecting_perspective',
+          progress: 8,
+          message: 'Detecting document borders for perspective correction…',
+        });
+        const detected = detectDocumentQuad(rawSurface);
+        throwIfScanAborted(signal);
+        if (detected) {
+          if (useWorker) {
+            const workerWarped = await this.preprocessWorker.warpPerspective(
+              rawSurface,
+              detected.corners,
+              signal
+            );
+            if (workerWarped) {
+              warpedBitmap = workerWarped;
+              workingSurface = workerWarped;
+              usedWorkerPreprocessing = true;
+            } else {
+              workingSurface = warpDocumentPerspective(rawSurface, detected.corners);
+            }
+          } else {
+            workingSurface = warpDocumentPerspective(rawSurface, detected.corners);
+          }
+          perspectiveInfo = detected;
+        } else {
+          perspectiveInfo = {
+            applied: false,
+            autoDetected: true,
+            corners: {
+              topLeft: { x: 0, y: 0 },
+              topRight: { x: 1, y: 0 },
+              bottomRight: { x: 1, y: 1 },
+              bottomLeft: { x: 0, y: 1 },
+            },
+            sourceQuadAreaRatio: 1,
+          };
+        }
       }
-      qualityReport = await assessImageQuality(workingSurface, qualityGateOptions);
-      if (enforceQualityGate && !qualityReport.passed) {
-        throw new QualityGateError(qualityReport);
+
+      throwIfScanAborted(signal);
+
+      let qualityReport: ImageQualityReport | undefined;
+      if (includeQualityReport || enforceQualityGate) {
+        if (enforceQualityGate) {
+          onProgress?.({
+            stage: 'quality_check',
+            progress: 10,
+            message: 'Evaluating sharpness, glare & exposure quality gate…',
+          });
+        }
+        qualityReport = await raceWithAbort(
+          assessImageQuality(workingSurface, qualityGateOptions),
+          signal
+        );
+        throwIfScanAborted(signal);
+        if (enforceQualityGate && !qualityReport.passed) {
+          throw new QualityGateError(qualityReport);
+        }
       }
-    }
 
-    const worker = await this.ensureWorker(vizStrategy.primaryLanguage, workerConfig, onProgress);
+      let deskewDegrees = manualDeskew;
+      let candidateOrder: Array<0 | 90 | 180 | 270> = [rotation];
 
-    let deskewDegrees = manualDeskew;
-    let candidateOrder: Array<0 | 90 | 180 | 270> = [rotation];
-
-    if (autoRotate) {
-      onProgress?.({
-        stage: 'detecting_orientation',
-        progress: 16,
-        message: 'Detecting document rotation & skew angle…',
-      });
-      const smallGray = sampleDownscaledGrayscale(workingSurface, 400);
-      const orient = analyzeDocumentOrientation(smallGray.data, smallGray.width, smallGray.height);
-      deskewDegrees = orient.deskewDegrees;
-      candidateOrder = orient.rankedCoarseRotations;
-    }
-
-    let bestPass = await this.runOrientationPass(
-      workingSurface,
-      worker,
-      workerConfig,
-      candidateOrder[0],
-      deskewDegrees,
-      preprocess,
-      enhanceMrzPass,
-      onProgress,
-      true
-    );
-
-    if (autoRotate && !bestPass.isConfidentUpright) {
-      let bestProbeRot = bestPass.coarse;
-      let bestProbeScore = bestPass.probeScore;
-
-      for (let idx = 1; idx < candidateOrder.length; idx++) {
-        const rot = candidateOrder[idx];
+      if (autoRotate) {
+        throwIfScanAborted(signal);
         onProgress?.({
           stage: 'detecting_orientation',
-          progress: 75 + idx * 2,
-          message: `Checking ${rot}° orientation alignment…`,
+          progress: 12,
+          message: 'Detecting document rotation & skew angle…',
         });
 
-        const score = await this.runLightweightProbe(
-          workingSurface,
-          worker,
-          rot,
-          deskewDegrees,
-          preprocess
-        );
+        let smallGray: GrayscaleBuffer | null = null;
+        if (useWorker) {
+          smallGray = await this.preprocessWorker.sampleDownscaledGrayscale(
+            workingSurface,
+            400,
+            signal
+          );
+          if (smallGray) usedWorkerPreprocessing = true;
+        }
+        if (!smallGray) {
+          smallGray = sampleDownscaledGrayscale(workingSurface, 400);
+        }
 
-        if (score > bestProbeScore) {
-          bestProbeScore = score;
-          bestProbeRot = rot;
-          if (score >= 240) {
-            break;
+        throwIfScanAborted(signal);
+        const orient = analyzeDocumentOrientation(
+          smallGray.data,
+          smallGray.width,
+          smallGray.height
+        );
+        deskewDegrees = orient.deskewDegrees;
+        candidateOrder = orient.rankedCoarseRotations;
+      }
+
+      let barcodeData: BarcodeParsedData | null = null;
+      if (enableBarcodePass) {
+        throwIfScanAborted(signal);
+        onProgress?.({
+          stage: 'detecting_barcode',
+          progress: 14,
+          message: 'Scanning for 2D PDF417 / AAMVA barcode…',
+        });
+        barcodeData = await detectPdf417Barcode(workingSurface, {
+          coarseRotation: candidateOrder[0],
+          signal,
+        });
+      }
+
+      throwIfScanAborted(signal);
+      const worker = await this.ensureWorker(
+        vizStrategy.primaryLanguage,
+        workerConfig,
+        onProgress,
+        signal
+      );
+
+      let bestPass = await this.runOrientationPass(
+        workingSurface,
+        worker,
+        workerConfig,
+        candidateOrder[0],
+        deskewDegrees,
+        preprocess,
+        enhanceMrzPass,
+        useWorker,
+        onProgress,
+        true,
+        signal
+      );
+      if (bestPass.usedWorkerPreprocess) usedWorkerPreprocessing = true;
+
+      if (autoRotate && !bestPass.isConfidentUpright && !barcodeData?.aamva) {
+        let bestProbeRot = bestPass.coarse;
+        let bestProbeScore = bestPass.probeScore;
+
+        for (let idx = 1; idx < candidateOrder.length; idx++) {
+          throwIfScanAborted(signal);
+          const rot = candidateOrder[idx];
+          onProgress?.({
+            stage: 'detecting_orientation',
+            progress: 75 + idx * 2,
+            message: `Checking ${rot}° orientation alignment…`,
+          });
+
+          const probe = await this.runLightweightProbe(
+            workingSurface,
+            worker,
+            rot,
+            deskewDegrees,
+            preprocess,
+            useWorker,
+            signal
+          );
+          if (probe.viaWorker) usedWorkerPreprocessing = true;
+
+          if (probe.score > bestProbeScore) {
+            bestProbeScore = probe.score;
+            bestProbeRot = rot;
+            if (probe.score >= 240) {
+              break;
+            }
+          }
+        }
+
+        if (bestProbeRot !== bestPass.coarse) {
+          throwIfScanAborted(signal);
+          bestPass = await this.runOrientationPass(
+            workingSurface,
+            worker,
+            workerConfig,
+            bestProbeRot,
+            deskewDegrees,
+            preprocess,
+            enhanceMrzPass,
+            useWorker,
+            onProgress,
+            false,
+            signal
+          );
+          if (bestPass.usedWorkerPreprocess) usedWorkerPreprocessing = true;
+        }
+      }
+
+      throwIfScanAborted(signal);
+
+      const { preprocessed, mrzData, mrzRawText, mrzModelUsed } = bestPass;
+      let cleanedFullText = bestPass.cleanedFullText;
+      let vizData = bestPass.vizData;
+      let activeVizLineBoxes = bestPass.vizLineBoxes;
+      let confidence = bestPass.confidence;
+      let activeVizLanguage = vizStrategy.primaryLanguage;
+      const effectiveVizMode: VizLanguageMode = vizStrategy.effectiveMode;
+
+      if (vizStrategy.allowAutoFollowUp) {
+        const targetNativeLang = resolveNativeVizLanguage({
+          issuingCountry:
+            mrzData?.issuingCountry ??
+            barcodeData?.aamva?.issuingCountry ??
+            vizData.issuingCountry,
+          nationality: mrzData?.nationality ?? vizData.nationality,
+          rawText: cleanedFullText,
+          customMap: workerConfig.vizLanguageMap,
+          baseLanguage: vizStrategy.primaryLanguage,
+        });
+
+        if (targetNativeLang) {
+          const nativeWorker = await this.ensureNativeVizWorker(
+            targetNativeLang,
+            workerConfig,
+            onProgress,
+            signal
+          );
+
+          if (nativeWorker) {
+            try {
+              throwIfScanAborted(signal);
+              this.activeStage = 'recognizing_viz_native';
+              onProgress?.({
+                stage: 'recognizing_viz_native',
+                progress: 85,
+                message: `Running native-script VIZ pass (${targetNativeLang})…`,
+              });
+
+              await raceWithAbort(
+                nativeWorker.setParameters({
+                  tessedit_pageseg_mode: PSM.SPARSE_TEXT,
+                  tessedit_char_whitelist: '',
+                }),
+                signal,
+                () => this.abortInFlightWorkers()
+              );
+
+              const fullInputUrl = preprocess
+                ? preprocessed.enhancedDataUrl
+                : preprocessed.originalDataUrl;
+              let nativeResult = await raceWithAbort(
+                nativeWorker.recognize(fullInputUrl, {}, { blocks: true }),
+                signal,
+                () => this.abortInFlightWorkers()
+              );
+              let nativeText = nativeResult.data.text || '';
+              let nativeConfidence = nativeResult.data.confidence || 0;
+
+              if (nativeText.trim().split(/\r?\n/).filter(Boolean).length < 2) {
+                throwIfScanAborted(signal);
+                await raceWithAbort(
+                  nativeWorker.setParameters({
+                    tessedit_pageseg_mode: PSM.AUTO,
+                    tessedit_char_whitelist: '',
+                  }),
+                  signal,
+                  () => this.abortInFlightWorkers()
+                );
+                const autoNative = await raceWithAbort(
+                  nativeWorker.recognize(fullInputUrl, {}, { blocks: true }),
+                  signal,
+                  () => this.abortInFlightWorkers()
+                );
+                if ((autoNative.data.text || '').trim().length > nativeText.trim().length) {
+                  nativeResult = autoNative;
+                  nativeText = autoNative.data.text || '';
+                  nativeConfidence = autoNative.data.confidence || 0;
+                }
+              }
+
+              const nativeBoxes = extractVizLineBoxes(nativeResult.data.blocks);
+              const cleanedNativeText =
+                nativeBoxes.length > 0 ? nativeBoxes.map((b) => b.text).join('\n') : nativeText;
+              const nativeVizData = parseVizText(cleanedNativeText, nativeBoxes);
+
+              vizData = mergeVizData(vizData, confidence, nativeVizData, nativeConfidence);
+              if (
+                nativeConfidence >= confidence - 2 ||
+                countPopulatedVizFields(nativeVizData) >= countPopulatedVizFields(bestPass.vizData)
+              ) {
+                cleanedFullText = cleanedNativeText || cleanedFullText;
+                if (nativeBoxes.length > 0) {
+                  activeVizLineBoxes = nativeBoxes;
+                }
+              }
+              confidence = Math.max(confidence, nativeConfidence);
+              activeVizLanguage = targetNativeLang;
+            } catch (err) {
+              if (isScanAbortedError(err)) throw err;
+            }
           }
         }
       }
 
-      if (bestProbeRot !== bestPass.coarse) {
-        bestPass = await this.runOrientationPass(
-          workingSurface,
-          worker,
-          workerConfig,
-          bestProbeRot,
-          deskewDegrees,
-          preprocess,
-          enhanceMrzPass,
-          onProgress,
-          false
-        );
-      }
-    }
+      throwIfScanAborted(signal);
 
-    const { preprocessed, mrzData, mrzRawText, mrzModelUsed } = bestPass;
-    let cleanedFullText = bestPass.cleanedFullText;
-    let vizData = bestPass.vizData;
-    let confidence = bestPass.confidence;
-    let activeVizLanguage = vizStrategy.primaryLanguage;
-    const effectiveVizMode: VizLanguageMode = vizStrategy.effectiveMode;
-
-    if (vizStrategy.allowAutoFollowUp) {
-      const targetNativeLang = resolveNativeVizLanguage({
-        issuingCountry: mrzData?.issuingCountry ?? vizData.issuingCountry,
-        nationality: mrzData?.nationality ?? vizData.nationality,
-        rawText: cleanedFullText,
-        customMap: workerConfig.vizLanguageMap,
-        baseLanguage: vizStrategy.primaryLanguage,
+      onProgress?.({
+        stage: 'parsing',
+        progress: 94,
+        message: 'Cropping portrait & signature, validating MRZ/VIZ & watermarks…',
       });
 
-      if (targetNativeLang) {
-        const nativeWorker = await this.ensureNativeVizWorker(
-          targetNativeLang,
-          workerConfig,
-          onProgress
+      const documentType = inferDocumentType(mrzData, barcodeData, vizData.documentTypeHint);
+      const crossValidation = crossValidateMrzAndViz(mrzData, vizData);
+
+      let portraitRegion: CroppedRegionInfo | null = null;
+      let signatureRegion: CroppedRegionInfo | null = null;
+      let watermarkProbeCanvas: HTMLCanvasElement | null = null;
+
+      if (extractPortrait || extractSignature || detectSpecimen) {
+        const media = await raceWithAbort(
+          extractPortraitAndSignature(preprocessed.originalDataUrl, {
+            documentType,
+            mrz: mrzData,
+            barcode: barcodeData,
+            vizLineBoxes: activeVizLineBoxes,
+            extractPortrait,
+            extractSignature,
+            checkColoredWatermark: detectSpecimen,
+          }),
+          signal
         );
+        portraitRegion = media.portrait;
+        signatureRegion = media.signature;
+        watermarkProbeCanvas = media.watermarkProbeCanvas ?? null;
+      }
 
-        if (nativeWorker) {
+      throwIfScanAborted(signal);
+
+      let specimenResult: SpecimenDetectionResult | undefined;
+      if (detectSpecimen) {
+        specimenResult = detectSpecimenWatermark({
+          rawOcrText: cleanedFullText,
+          rawMrzText: mrzRawText,
+          mrz: mrzData,
+          viz: vizData,
+          barcode: barcodeData,
+          unmappedFields: vizData.unmappedKeyValues,
+        });
+
+        // If no watermark found in main OCR text and a red/colored stamp overlay was spotted,
+        // run a fast deskewed stamp-mask OCR check on the already-warm worker.
+        if (!specimenResult.isSpecimen && watermarkProbeCanvas) {
           try {
-            this.activeStage = 'recognizing_viz_native';
-            onProgress?.({
-              stage: 'recognizing_viz_native',
-              progress: 85,
-              message: `Running native-script VIZ pass (${targetNativeLang})…`,
-            });
-
-            await nativeWorker.setParameters({
-              tessedit_pageseg_mode: PSM.SPARSE_TEXT,
-              tessedit_char_whitelist: '',
-            });
-
-            const fullInputUrl = preprocess
-              ? preprocessed.enhancedDataUrl
-              : preprocessed.originalDataUrl;
-            let nativeResult = await nativeWorker.recognize(fullInputUrl, {}, { blocks: true });
-            let nativeText = nativeResult.data.text || '';
-            let nativeConfidence = nativeResult.data.confidence || 0;
-
-            if (nativeText.trim().split(/\r?\n/).filter(Boolean).length < 2) {
-              await nativeWorker.setParameters({
-                tessedit_pageseg_mode: PSM.AUTO,
+            throwIfScanAborted(signal);
+            await raceWithAbort(
+              worker.setParameters({
+                tessedit_pageseg_mode: PSM.SPARSE_TEXT,
                 tessedit_char_whitelist: '',
+              }),
+              signal,
+              () => this.abortInFlightWorkers()
+            );
+            const stampRes = await raceWithAbort(
+              worker.recognize(watermarkProbeCanvas),
+              signal,
+              () => this.abortInFlightWorkers()
+            );
+            const stampText = stampRes.data.text || '';
+            if (stampText.trim()) {
+              specimenResult = detectSpecimenWatermark({
+                rawOcrText: cleanedFullText,
+                rawMrzText: mrzRawText,
+                mrz: mrzData,
+                viz: vizData,
+                barcode: barcodeData,
+                unmappedFields: vizData.unmappedKeyValues,
+                watermarkOcrText: stampText,
               });
-              const autoNative = await nativeWorker.recognize(fullInputUrl, {}, { blocks: true });
-              if ((autoNative.data.text || '').trim().length > nativeText.trim().length) {
-                nativeResult = autoNative;
-                nativeText = autoNative.data.text || '';
-                nativeConfidence = autoNative.data.confidence || 0;
-              }
             }
-
-            const nativeBoxes = extractVizLineBoxes(nativeResult.data.blocks);
-            const cleanedNativeText =
-              nativeBoxes.length > 0 ? nativeBoxes.map((b) => b.text).join('\n') : nativeText;
-            const nativeVizData = parseVizText(cleanedNativeText, nativeBoxes);
-
-            vizData = mergeVizData(vizData, confidence, nativeVizData, nativeConfidence);
-            if (nativeConfidence >= confidence - 2 || countPopulatedVizFields(nativeVizData) >= countPopulatedVizFields(bestPass.vizData)) {
-              cleanedFullText = cleanedNativeText || cleanedFullText;
-            }
-            confidence = Math.max(confidence, nativeConfidence);
-            activeVizLanguage = targetNativeLang;
-          } catch {
-            // Silently preserve primary VIZ pass if native follow-up fails mid-recognition
+          } catch (err) {
+            if (isScanAbortedError(err)) throw err;
           }
         }
       }
+
+      const aamva = barcodeData?.aamva ?? null;
+      const fieldSources: Record<string, FieldSource> = {};
+
+      const issuingCountry = pickField(
+        mrzData?.issuingCountry,
+        vizData.issuingCountry,
+        'issuingCountry',
+        fieldSources,
+        aamva?.issuingCountry
+      );
+      const nationality = pickField(
+        mrzData?.nationality,
+        vizData.nationality,
+        'nationality',
+        fieldSources
+      );
+
+      const surname = pickSingleSideName(
+        mrzData?.surname,
+        aamva?.surname,
+        vizData.surname,
+        'surname',
+        fieldSources
+      );
+      const surnames =
+        surname && mrzData?.surname && surname !== mrzData.surname
+          ? surname.split(/\s+/).filter(Boolean)
+          : mrzData?.surnames && mrzData.surnames.length > 0
+            ? mrzData.surnames
+            : aamva?.surnames && aamva.surnames.length > 0
+              ? aamva.surnames
+              : vizData.surnames.length > 0
+                ? vizData.surnames
+                : surname
+                  ? surname.split(/\s+/).filter(Boolean)
+                  : [];
+
+      const givenNames = pickSingleSideName(
+        mrzData?.givenNames,
+        aamva?.givenNames,
+        vizData.givenNames,
+        'givenNames',
+        fieldSources
+      );
+      const givenNamesList =
+        givenNames && mrzData?.givenNames && givenNames !== mrzData.givenNames
+          ? givenNames.split(/\s+/).filter(Boolean)
+          : mrzData?.givenNamesList && mrzData.givenNamesList.length > 0
+            ? mrzData.givenNamesList
+            : aamva?.givenNamesList && aamva.givenNamesList.length > 0
+              ? aamva.givenNamesList
+              : givenNames
+                ? givenNames.split(/\s+/).filter(Boolean)
+                : [];
+
+      const fullName =
+        givenNames || surname
+          ? [givenNames, surname].filter(Boolean).join(' ')
+          : pickField(null, vizData.fullName, 'fullName', fieldSources, aamva?.fullName);
+      if (fullName && !fieldSources.fullName) {
+        fieldSources.fullName =
+          fieldSources.givenNames === 'MRZ+VIZ' || fieldSources.surname === 'MRZ+VIZ'
+            ? 'MRZ+VIZ'
+            : fieldSources.givenNames === 'BARCODE+VIZ' || fieldSources.surname === 'BARCODE+VIZ'
+              ? 'BARCODE+VIZ'
+              : fieldSources.givenNames ?? fieldSources.surname ?? 'VIZ';
+      }
+
+      const documentNumber = reconcileDocumentNumber(
+        mrzData,
+        aamva?.documentNumber,
+        vizData.documentNumber,
+        fieldSources
+      );
+
+      const mrzPersonal =
+        mrzData && (mrzData.optionalData1 || mrzData.optionalData2)
+          ? [mrzData.optionalData1, mrzData.optionalData2].filter(Boolean).join(' ')
+          : null;
+      const personalNumber = pickField(
+        mrzPersonal,
+        vizData.personalNumber,
+        'personalNumber',
+        fieldSources,
+        aamva?.documentDiscriminator
+      );
+
+      const dateOfBirth = pickField(
+        mrzData?.dateOfBirth,
+        vizData.dateOfBirth,
+        'dateOfBirth',
+        fieldSources,
+        aamva?.dateOfBirth
+      );
+      const dateOfExpiry = pickField(
+        mrzData?.dateOfExpiry,
+        vizData.dateOfExpiry,
+        'dateOfExpiry',
+        fieldSources,
+        aamva?.dateOfExpiry
+      );
+      const dateOfIssue = pickField(
+        null,
+        vizData.dateOfIssue,
+        'dateOfIssue',
+        fieldSources,
+        aamva?.dateOfIssue
+      );
+
+      const sexValue =
+        mrzData?.sex && mrzData.sex !== 'Unspecified'
+          ? (mrzData.sex as 'M' | 'F' | 'X')
+          : aamva?.sex ?? vizData.sex ?? 'Unspecified';
+      if (mrzData?.sex && mrzData.sex !== 'Unspecified' && vizData.sex) {
+        fieldSources.sex = 'MRZ+VIZ';
+      } else if (mrzData?.sex && mrzData.sex !== 'Unspecified') {
+        fieldSources.sex = 'MRZ';
+      } else if (aamva?.sex) {
+        fieldSources.sex = vizData.sex ? 'BARCODE+VIZ' : 'BARCODE';
+      } else if (vizData.sex) {
+        fieldSources.sex = 'VIZ';
+      }
+
+      const placeOfBirth = pickField(null, vizData.placeOfBirth, 'placeOfBirth', fieldSources);
+      const address = pickField(null, vizData.address, 'address', fieldSources, aamva?.address);
+      const parents = pickField(null, vizData.parents, 'parents', fieldSources);
+      const issuingAuthority = pickField(
+        null,
+        vizData.issuingAuthority,
+        'issuingAuthority',
+        fieldSources,
+        aamva?.jurisdictionName ? `${aamva.jurisdictionName} DMV / Licensing` : null
+      );
+      const licenseClass = pickField(
+        null,
+        vizData.licenseClass,
+        'licenseClass',
+        fieldSources,
+        aamva?.licenseClass
+      );
+      const restrictions = pickField(
+        null,
+        vizData.restrictions,
+        'restrictions',
+        fieldSources,
+        aamva?.restrictions
+      );
+      const endorsements = pickField(
+        null,
+        vizData.endorsements,
+        'endorsements',
+        fieldSources,
+        aamva?.endorsements
+      );
+      const height = pickField(null, vizData.height, 'height', fieldSources, aamva?.height);
+      const eyeColor = pickField(null, vizData.eyeColor, 'eyeColor', fieldSources, aamva?.eyeColor);
+      const hairColor = pickField(
+        null,
+        vizData.hairColor,
+        'hairColor',
+        fieldSources,
+        aamva?.hairColor
+      );
+
+      const age = computeAge(dateOfBirth);
+      if (age !== null) fieldSources.age = 'COMPUTED';
+
+      const isExpired = computeIsExpired(dateOfExpiry);
+      if (isExpired !== null) fieldSources.isExpired = 'COMPUTED';
+
+      const issuingCountryName = resolveCountryName(issuingCountry);
+      const nationalityName = resolveCountryName(nationality) ?? nationality;
+      const processingTimeMs = Math.round(performance.now() - startTime);
+
+      const orientation: OrientationInfo = {
+        coarseDegrees: bestPass.coarse,
+        deskewDegrees,
+        totalDegrees: normalizeDegrees360(bestPass.coarse + deskewDegrees),
+        autoDetected: autoRotate,
+      };
+
+      const finalConfidence = aamva ? Math.max(Math.round(confidence), 94) : Math.round(confidence);
+
+      onProgress?.({
+        stage: 'complete',
+        progress: 100,
+        message: 'Scan complete',
+      });
+
+      return {
+        documentType,
+        documentFormat: mrzData
+          ? mrzData.format
+          : aamva
+            ? 'AAMVA_PDF417'
+            : barcodeData
+              ? 'PDF417'
+              : 'VISUAL_ONLY',
+        issuingCountry,
+        issuingCountryName,
+        documentNumber,
+        personalNumber,
+        surname,
+        surnames,
+        givenNames,
+        givenNamesList,
+        fullName,
+        nationality,
+        nationalityName,
+        dateOfBirth,
+        age,
+        sex: sexValue,
+        dateOfIssue,
+        dateOfExpiry,
+        isExpired,
+        placeOfBirth,
+        address,
+        parents,
+        issuingAuthority,
+        licenseClass,
+        restrictions,
+        endorsements,
+        height,
+        eyeColor,
+        hairColor,
+        mrz: mrzData,
+        barcode: barcodeData,
+        portraitDataUrl: extractPortrait ? (portraitRegion?.dataUrl ?? null) : undefined,
+        portraitRegion: extractPortrait ? portraitRegion : undefined,
+        signatureDataUrl: extractSignature ? (signatureRegion?.dataUrl ?? null) : undefined,
+        signatureRegion: extractSignature ? signatureRegion : undefined,
+        specimen: detectSpecimen ? specimenResult : undefined,
+        crossValidation,
+        mrzModel: mrzModelUsed,
+        vizLanguageMode: effectiveVizMode,
+        vizLanguage: activeVizLanguage,
+        workerPreprocessed: usedWorkerPreprocessing,
+        unmappedFields: vizData.unmappedKeyValues,
+        fieldSources,
+        rawOcrText: cleanedFullText.trim(),
+        rawMrzText: mrzRawText,
+        confidence: finalConfidence,
+        processingTimeMs,
+        sourceDimensions: {
+          width: preprocessed.width,
+          height: preprocessed.height,
+        },
+        orientation,
+        perspective: perspectiveInfo,
+        quality: includeQualityReport ? qualityReport : undefined,
+        previews: includePreviews
+          ? {
+              originalDataUrl: preprocessed.originalDataUrl,
+              enhancedDataUrl: preprocessed.enhancedDataUrl,
+              mrzCropDataUrl: preprocessed.mrzCropDataUrl,
+            }
+          : undefined,
+      };
+    } finally {
+      if (warpedBitmap && warpedBitmap !== ownedBitmap) {
+        try {
+          warpedBitmap.close();
+        } catch {
+          // Ignore already-closed bitmaps
+        }
+      }
+      if (ownedBitmap) {
+        try {
+          ownedBitmap.close();
+        } catch {
+          // Ignore already-closed bitmaps
+        }
+      }
     }
-
-    onProgress?.({
-      stage: 'parsing',
-      progress: 94,
-      message: 'Extracting personal fields & verifying ICAO 9303 check digits…',
-    });
-
-    const fieldSources: Record<string, FieldSource> = {};
-
-    const issuingCountry = pickField(
-      mrzData?.issuingCountry,
-      vizData.issuingCountry,
-      'issuingCountry',
-      fieldSources
-    );
-    const nationality = pickField(
-      mrzData?.nationality,
-      vizData.nationality,
-      'nationality',
-      fieldSources
-    );
-
-    const surname = pickSingleSideName(
-      mrzData?.surname,
-      vizData.surname,
-      'surname',
-      fieldSources
-    );
-    const surnames =
-      surname && mrzData?.surname && surname !== mrzData.surname
-        ? surname.split(/\s+/).filter(Boolean)
-        : mrzData?.surnames && mrzData.surnames.length > 0
-          ? mrzData.surnames
-          : vizData.surnames.length > 0
-            ? vizData.surnames
-            : surname
-              ? surname.split(/\s+/).filter(Boolean)
-              : [];
-
-    const givenNames = pickSingleSideName(
-      mrzData?.givenNames,
-      vizData.givenNames,
-      'givenNames',
-      fieldSources
-    );
-    const givenNamesList =
-      givenNames && mrzData?.givenNames && givenNames !== mrzData.givenNames
-        ? givenNames.split(/\s+/).filter(Boolean)
-        : mrzData?.givenNamesList && mrzData.givenNamesList.length > 0
-          ? mrzData.givenNamesList
-          : givenNames
-            ? givenNames.split(/\s+/).filter(Boolean)
-            : [];
-
-    const fullName =
-      givenNames || surname
-        ? [givenNames, surname].filter(Boolean).join(' ')
-        : pickField(null, vizData.fullName, 'fullName', fieldSources);
-    if (fullName && !fieldSources.fullName) {
-      fieldSources.fullName =
-        fieldSources.givenNames === 'MRZ+VIZ' || fieldSources.surname === 'MRZ+VIZ'
-          ? 'MRZ+VIZ'
-          : fieldSources.givenNames ?? fieldSources.surname ?? 'VIZ';
-    }
-
-    const documentNumber = reconcileDocumentNumber(
-      mrzData,
-      vizData.documentNumber,
-      fieldSources
-    );
-
-    const mrzPersonal =
-      mrzData && (mrzData.optionalData1 || mrzData.optionalData2)
-        ? [mrzData.optionalData1, mrzData.optionalData2].filter(Boolean).join(' ')
-        : null;
-    const personalNumber = pickField(
-      mrzPersonal,
-      vizData.personalNumber,
-      'personalNumber',
-      fieldSources
-    );
-
-    const dateOfBirth = pickField(
-      mrzData?.dateOfBirth,
-      vizData.dateOfBirth,
-      'dateOfBirth',
-      fieldSources
-    );
-    const dateOfExpiry = pickField(
-      mrzData?.dateOfExpiry,
-      vizData.dateOfExpiry,
-      'dateOfExpiry',
-      fieldSources
-    );
-    const dateOfIssue = pickField(null, vizData.dateOfIssue, 'dateOfIssue', fieldSources);
-
-    const sexValue =
-      mrzData?.sex && mrzData.sex !== 'Unspecified'
-        ? (mrzData.sex as 'M' | 'F' | 'X')
-        : vizData.sex ?? 'Unspecified';
-    if (mrzData?.sex && mrzData.sex !== 'Unspecified' && vizData.sex) {
-      fieldSources.sex = 'MRZ+VIZ';
-    } else if (mrzData?.sex && mrzData.sex !== 'Unspecified') {
-      fieldSources.sex = 'MRZ';
-    } else if (vizData.sex) {
-      fieldSources.sex = 'VIZ';
-    }
-
-    const placeOfBirth = pickField(null, vizData.placeOfBirth, 'placeOfBirth', fieldSources);
-    const address = pickField(null, vizData.address, 'address', fieldSources);
-    const parents = pickField(null, vizData.parents, 'parents', fieldSources);
-    const issuingAuthority = pickField(
-      null,
-      vizData.issuingAuthority,
-      'issuingAuthority',
-      fieldSources
-    );
-    const licenseClass = pickField(null, vizData.licenseClass, 'licenseClass', fieldSources);
-    const restrictions = pickField(null, vizData.restrictions, 'restrictions', fieldSources);
-    const endorsements = pickField(null, vizData.endorsements, 'endorsements', fieldSources);
-    const height = pickField(null, vizData.height, 'height', fieldSources);
-    const eyeColor = pickField(null, vizData.eyeColor, 'eyeColor', fieldSources);
-    const hairColor = pickField(null, vizData.hairColor, 'hairColor', fieldSources);
-
-    const age = computeAge(dateOfBirth);
-    if (age !== null) fieldSources.age = 'COMPUTED';
-
-    const isExpired = computeIsExpired(dateOfExpiry);
-    if (isExpired !== null) fieldSources.isExpired = 'COMPUTED';
-
-    const documentType = inferDocumentType(mrzData, vizData.documentTypeHint);
-    const issuingCountryName = resolveCountryName(issuingCountry);
-    const nationalityName = resolveCountryName(nationality) ?? nationality;
-
-    const processingTimeMs = Math.round(performance.now() - startTime);
-
-    const orientation: OrientationInfo = {
-      coarseDegrees: bestPass.coarse,
-      deskewDegrees,
-      totalDegrees: normalizeDegrees360(bestPass.coarse + deskewDegrees),
-      autoDetected: autoRotate,
-    };
-
-    onProgress?.({
-      stage: 'complete',
-      progress: 100,
-      message: 'Scan complete',
-    });
-
-    return {
-      documentType,
-      documentFormat: mrzData ? mrzData.format : 'VISUAL_ONLY',
-      issuingCountry,
-      issuingCountryName,
-      documentNumber,
-      personalNumber,
-      surname,
-      surnames,
-      givenNames,
-      givenNamesList,
-      fullName,
-      nationality,
-      nationalityName,
-      dateOfBirth,
-      age,
-      sex: sexValue,
-      dateOfIssue,
-      dateOfExpiry,
-      isExpired,
-      placeOfBirth,
-      address,
-      parents,
-      issuingAuthority,
-      licenseClass,
-      restrictions,
-      endorsements,
-      height,
-      eyeColor,
-      hairColor,
-      mrz: mrzData,
-      mrzModel: mrzModelUsed,
-      vizLanguageMode: effectiveVizMode,
-      vizLanguage: activeVizLanguage,
-      unmappedFields: vizData.unmappedKeyValues,
-      fieldSources,
-      rawOcrText: cleanedFullText.trim(),
-      rawMrzText: mrzRawText,
-      confidence: Math.round(confidence),
-      processingTimeMs,
-      sourceDimensions: {
-        width: preprocessed.width,
-        height: preprocessed.height,
-      },
-      orientation,
-      perspective: perspectiveInfo,
-      quality: includeQualityReport ? qualityReport : undefined,
-      previews: includePreviews
-        ? {
-            originalDataUrl: preprocessed.originalDataUrl,
-            enhancedDataUrl: preprocessed.enhancedDataUrl,
-            mrzCropDataUrl: preprocessed.mrzCropDataUrl,
-          }
-        : undefined,
-    };
   }
 
-  /**
-   * Scans both the front and back images of a two-sided document (ID card, residence permit,
-   * or driver license) reusing warm OCR workers across both sides and merges them into one
-   * unified ExtractedIdentity with cross-side consistency checks.
-   */
   async scanPair(
     front: ImageInput,
     back: ImageInput,
     options: PairScanOptions = {}
   ): Promise<MergedDocumentResult> {
-    const { frontOptions, backOptions, onProgress, ...shared } = options;
+    const { frontOptions, backOptions, onProgress, signal, ...shared } = options;
+
+    throwIfScanAborted(signal);
 
     const frontResult = await this.scan(front, {
       ...shared,
       ...frontOptions,
+      signal: frontOptions?.signal ?? signal,
       onProgress: scaleProgressCallback(0, 48, onProgress, 'Front'),
     });
+
+    throwIfScanAborted(signal);
 
     const backResult = await this.scan(back, {
       ...shared,
       ...backOptions,
+      signal: backOptions?.signal ?? signal,
       onProgress: scaleProgressCallback(50, 46, onProgress, 'Back'),
     });
+
+    throwIfScanAborted(signal);
 
     onProgress?.({
       stage: 'parsing',
@@ -1845,6 +2334,7 @@ export class DocumentScanner {
   }
 
   async terminate(): Promise<void> {
+    this.preprocessWorker.terminate();
     if (this.worker) {
       await this.worker.terminate();
       this.worker = null;
@@ -1876,6 +2366,7 @@ export async function scanDocumentImage(
     corePath: options.corePath,
     langPath: options.langPath,
     workerBlobURL: options.workerBlobURL,
+    useWorkerPreprocessing: options.useWorkerPreprocessing,
     mrzModel: options.mrzModel,
     mrzLanguage: options.mrzLanguage,
     mrzLangPath: options.mrzLangPath,
@@ -1901,6 +2392,7 @@ export async function scanDocumentPair(
     corePath: options.corePath,
     langPath: options.langPath,
     workerBlobURL: options.workerBlobURL,
+    useWorkerPreprocessing: options.useWorkerPreprocessing,
     mrzModel: options.mrzModel,
     mrzLanguage: options.mrzLanguage,
     mrzLangPath: options.mrzLangPath,

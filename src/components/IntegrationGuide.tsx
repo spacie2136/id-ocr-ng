@@ -5,25 +5,53 @@ import { SCANNER_VERSION } from '../scanner';
 const UMD_SNIPPET = `<!-- Always use the latest build via GitHub + jsDelivr (or pin @v${SCANNER_VERSION}/.../docscan-ocr.v${SCANNER_VERSION}.umd.js) -->
 <script src="https://cdn.jsdelivr.net/gh/<USERNAME>/<REPO>@main/public/lib/docscan-ocr.latest.umd.js"></script>
 <script>
-  const { DocumentScanner, watchCameraAutoCapture, SCANNER_VERSION } = window.DocScanOCR;
+  const {
+    DocumentScanner,
+    watchCameraAutoCapture,
+    computeVisibleVideoCrop,
+    isScanAbortedError,
+    SCANNER_VERSION,
+  } = window.DocScanOCR;
   console.log('Loaded DocScan OCR v' + SCANNER_VERSION);
 
-  const scanner = new DocumentScanner();
+  const scanner = new DocumentScanner({
+    useWorkerPreprocessing: true, // default: offloads perspective warp & contrast/MRZ preprocessing via OffscreenCanvas Web Worker
+  });
 
-  // Live camera auto-capture with sharpness, glare, lighting & stability gates
+  // Live camera auto-capture locked to the visible viewfinder crop (object-cover safe on phones)
+  let activeController = null;
   const watcher = watchCameraAutoCapture(videoElement, {
-    requiredStableFrames: 3,
+    captureRegion: () => computeVisibleVideoCrop(videoElement),
+    requiredStableFrames: 2,
     onQualityUpdate: (report, lockProgress) => {
       console.log(report.guidance, 'Sharpness:', report.sharpnessScore, Math.round(lockProgress * 100) + '%');
     },
     onAutoCapture: async (capturedFile) => {
-      const identity = await scanner.scan(capturedFile, {
-        perspectiveCorrection: true,
-        autoRotate: true,
-        mrzModel: 'ocrb',        // default OCR-B MRZ traineddata
-        vizLanguageMode: 'auto', // default: routes non-English docs to native scripts (eng+deu, eng+spa, etc.)
-      });
-      console.log(identity.fullName, 'VIZ lang used:', identity.vizLanguage);
+      activeController?.abort('Superseded by newer capture');
+      activeController = new AbortController();
+      try {
+        const identity = await scanner.scan(capturedFile, {
+          perspectiveCorrection: true,
+          autoRotate: true,
+          enableBarcodePass: true, // default: PDF417 + AAMVA decoding for US/CA driver licenses & IDs
+          extractPortrait: true,   // default: returns portraitDataUrl & portraitRegion
+          extractSignature: true,  // default: returns signatureDataUrl & signatureRegion
+          detectSpecimen: true,    // default: flags MUSTER/SPECIMEN/VOID/UTO watermarks
+          mrzModel: 'ocrb',        // default OCR-B MRZ traineddata
+          vizLanguageMode: 'auto', // default: routes non-English docs to native scripts (eng+deu, eng+spa, etc.)
+          signal: activeController.signal,
+        });
+        console.log(
+          identity.fullName,
+          identity.portraitDataUrl,
+          identity.signatureDataUrl,
+          identity.specimen?.isSpecimen,
+          identity.crossValidation?.consistent,
+          identity.barcode?.aamva,
+        );
+      } catch (err) {
+        if (!isScanAbortedError(err)) console.error(err);
+      }
     },
   });
 </script>`;
@@ -33,8 +61,12 @@ const ESM_REMOTE_SNIPPET = `<script type="module">
     DocumentScanner,
     assessImageQuality,
     scanDocumentPair,
+    isScanAbortedError,
+    supportsWorkerPreprocessing,
     SCANNER_VERSION,
   } from 'https://cdn.jsdelivr.net/gh/<USERNAME>/<REPO>@main/public/lib/docscan-ocr.latest.es.js';
+
+  console.log('OffscreenCanvas worker support:', supportsWorkerPreprocessing());
 
   // Pre-flight quality check on uploaded files (or enforce directly inside scan())
   const quality = await assessImageQuality(file);
@@ -43,74 +75,137 @@ const ESM_REMOTE_SNIPPET = `<script type="module">
   }
 
   const scanner = new DocumentScanner({
-    mrzModel: 'ocrb',         // default ('standard' switches MRZ back to eng)
-    vizLanguageMode: 'auto',  // default ('multilingual' bundles eng+deu+spa+fra; 'standard' uses eng only)
+    useWorkerPreprocessing: true, // default (falls back automatically to main-thread canvas if unsupported)
+    enableBarcodePass: true,      // default: native BarcodeDetector + @zxing/library PDF417/AAMVA fallback
+    extractPortrait: true,        // default: crops face photo into result.portraitDataUrl
+    extractSignature: true,       // default: crops signature strip into result.signatureDataUrl
+    detectSpecimen: true,         // default: flags MUSTER / SPECIMEN / WZÓR / VZOR / VOID / UTO samples
+    mrzModel: 'ocrb',             // default ('standard' switches MRZ back to eng)
+    vizLanguageMode: 'auto',      // default ('multilingual' bundles eng+deu+spa+fra; 'standard' uses eng only)
     vizLanguageMap: { POL: 'pol' }, // optional custom issuing-state -> traineddata override
   });
 
-  // Or override explicitly per scan:
-  // await scanner.scan(file, { vizLanguages: 'eng+deu' });
-  const merged = await scanDocumentPair(frontFile, backFile, {
-    enforceQualityGate: false,
-    perspectiveCorrection: true,
-    autoRotate: true,
-  });
-
-  console.log(\`v\${SCANNER_VERSION}\`, merged.vizLanguage, merged);
+  // Cancel any in-flight two-sided scan cleanly after a timeout or user click
+  const controller = new AbortController();
+  try {
+    const merged = await scanDocumentPair(frontFile, backFile, {
+      enforceQualityGate: false,
+      perspectiveCorrection: true,
+      autoRotate: true,
+      signal: controller.signal,
+    });
+    console.log(
+      \`v\${SCANNER_VERSION}\`,
+      merged.documentFormat,
+      merged.portraitDataUrl,
+      merged.specimen,
+      merged.crossValidation,
+      merged.barcode?.aamva,
+    );
+  } catch (err) {
+    if (isScanAbortedError(err)) {
+      console.log('Two-sided scan aborted cleanly');
+    } else {
+      throw err;
+    }
+  }
 </script>`;
 
 const SOURCE_SNIPPET = `import {
   CameraAutoCapture,
   DocumentScanner,
-  assessImageQuality,
-  mergeDocumentSides,
+  computeVisibleVideoCrop,
+  crossValidateMrzAndViz,
+  detectSpecimenWatermark,
+  isScanAbortedError,
+  parseAamvaPayload,
 } from './scanner';
 
 const scanner = new DocumentScanner({
+  useWorkerPreprocessing: true, // default: OffscreenCanvas Blob Worker (zero Vite/bundler config required)
+  enableBarcodePass: true,
+  extractPortrait: true,
+  extractSignature: true,
+  detectSpecimen: true,
   mrzModel: 'ocrb',
-  vizLanguageMode: 'auto', // country-routed native diacritic pass (e.g. eng+deu, eng+spa, eng+lit)
+  vizLanguageMode: 'auto',
 });
 
-// 1. Live <video> auto-capture controller
+// 1. Mobile-calibrated live <video> auto-capture + AbortController scan cancellation
+let abortController: AbortController | null = null;
+
 const controller = new CameraAutoCapture(videoEl, {
-  minSharpness: 34,
-  maxGlareRatio: 0.045,
-  requiredStableFrames: 3,
+  captureRegion: () => computeVisibleVideoCrop(videoEl),
+  minSharpness: 22,
+  maxMotionDelta: 8.5,
+  maxGlareRatio: 0.055,
+  requiredStableFrames: 2,
   onQualityUpdate: (report, progress) => updateHud(report, progress),
   onAutoCapture: async (file) => {
-    const res = await scanner.scan(file);
-    console.log(res.fullName, res.vizLanguage, res.quality);
+    abortController?.abort('Restarting scan');
+    abortController = new AbortController();
+    try {
+      const res = await scanner.scan(file, { signal: abortController.signal });
+      if (res.specimen?.isSpecimen) {
+        console.warn('Sample/Specimen rejected:', res.specimen.matchedIndicators);
+      }
+      if (res.crossValidation && !res.crossValidation.consistent) {
+        console.warn('MRZ vs VIZ mismatch:', res.crossValidation.discrepancies);
+      }
+      console.log(res.fullName, res.portraitDataUrl, res.signatureDataUrl);
+    } catch (err) {
+      if (!isScanAbortedError(err)) throw err;
+    }
   },
 });
 controller.start();
 
-// 2. Or override VIZ language mode explicitly
-const multiPass = await scanner.scan(uploadedFile, {
-  vizLanguageMode: 'multilingual', // single-pass 'eng+deu+spa+fra'
-});
-const standardOnly = await scanner.scan(uploadedFile, {
-  vizLanguageMode: 'standard',     // single-language 'eng'
-});
-const forced = await scanner.scan(uploadedFile, {
-  vizLanguages: 'eng+ces',         // explicit Tesseract traineddata override
+// 2. Standalone pure-TS AAMVA, MRZ↔VIZ cross-validation, and specimen helpers
+const aamva = parseAamvaPayload(rawPdf417Text);
+const specimenCheck = detectSpecimenWatermark({ rawOcrText: ocrText, mrz });
+const mrzVizAudit = crossValidateMrzAndViz(mrz, viz);
+console.log(aamva?.fullName, specimenCheck.isSpecimen, mrzVizAudit.discrepancies);
+
+// 3. Disable portrait/signature cropping or worker preprocessing per scan
+const minimalScan = await scanner.scan(uploadedFile, {
+  useWorkerPreprocessing: false,
+  extractPortrait: false,
+  extractSignature: false,
+  vizLanguageMode: 'multilingual',
 });`;
 
 const MODULES = [
   {
+    name: 'mediaExtractor.ts',
+    role: 'Pure-JS RGBA face portrait detector, multilingual VIZ-anchored holder signature cropper (with cursive ink fallback), PNG data URL exporter, and crimson/diagonal watermark OCR isolation pass.',
+  },
+  {
+    name: 'specimenValidator.ts',
+    role: 'Single-side MRZ vs. VIZ cross-validator (diacritic & German transliteration aware, OCR-confusable severity grading) plus multilingual MUSTER / SPECIMEN / WZÓR / VZOR / VOID / ICAO UTO watermark detector.',
+  },
+  {
+    name: 'preprocessWorker.ts',
+    role: 'Self-contained OffscreenCanvas + ImageBitmap Web Worker client (PreprocessWorkerClient) offloading 2400px perspective homography, grayscale sampling, contrast enhancement & MRZ strips off the main thread, plus ScanAbortedError / AbortSignal cancellation helpers.',
+  },
+  {
+    name: 'pdf417Decoder.ts & aamvaParser.ts',
+    role: 'Hybrid PDF417 2D barcode detector (native BarcodeDetector + pure-JS @zxing/library multi-rotation/crop fallback) and full AAMVA CDS v01–v10+ parser with 6-digit US/Canadian IIN jurisdiction lookup.',
+  },
+  {
     name: 'qualityGate.ts',
-    role: 'Sharpness/Laplacian focus scoring, glare hotspot & exposure checks, frame-to-frame steadiness, and CameraAutoCapture / watchCameraAutoCapture controller.',
+    role: 'Sharpness/Laplacian focus scoring, glare hotspot & exposure checks, WYSIWYG object-cover crop helper (computeVisibleVideoCrop), and handheld-calibrated CameraAutoCapture / watchCameraAutoCapture controller.',
   },
   {
     name: 'ocrEngine.ts & vizLanguages.ts',
-    role: 'Multi-worker Tesseract.js orchestration (dedicated ocrb_int MRZ worker, primary VIZ worker, and country-routed native VIZ worker), enforceQualityGate pre-check, perspective/orientation probing, and scanPair().',
+    role: 'Multi-worker Tesseract.js + PDF417 orchestration, OffscreenCanvas preprocessing dispatch, portrait/signature crop & watermark probe, single-side MRZ↔VIZ cross-validation, AbortSignal worker termination, country-routed native VIZ pass, and scanPair().',
   },
   {
     name: 'perspective.ts',
-    role: 'Pure-JS 4-corner document quadrilateral detector, orthogonal boundary refiner, and 3×3 homography bilinear warp.',
+    role: 'Pure-JS 4-corner document quadrilateral detector (supporting both full-bleed scans and small framed ID cards in tall phone photos), orthogonal refiner, and 3×3 homography bilinear warp.',
   },
   {
     name: 'pairMerger.ts',
-    role: 'Two-sided Front + Back identity merger with swapped-side detection, accented VIZ enrichment, and consistency conflict checks.',
+    role: 'Two-sided Front + Back identity merger with swapped-side detection, BARCODE+VIZ fusion, portrait/signature/specimen propagation, accented diacritic enrichment, and consistency conflict checks.',
   },
   {
     name: 'orientation.ts',
@@ -118,7 +213,7 @@ const MODULES = [
   },
   {
     name: 'imagePreprocessor.ts',
-    role: 'Browser Canvas scaling, arbitrary-angle rotation/deskewing, contrast stretching, and flat-field MRZ isolation.',
+    role: 'Main-thread HTMLCanvasElement fallback + transferable ImageBitmap loader for scaling, arbitrary-angle rotation/deskewing, contrast stretching, and flat-field MRZ isolation.',
   },
   {
     name: 'mrzParser.ts & vizParser.ts',
@@ -133,7 +228,7 @@ const MODULES = [
 const ARTIFACTS = [
   {
     path: '/lib/docscan-ocr.latest.umd.js',
-    desc: 'Always-latest UMD script (exposes window.DocScanOCR) so remote apps update automatically.',
+    desc: 'Always-latest UMD script (exposes global window.DocScanOCR) so remote apps update automatically.',
   },
   {
     path: '/lib/docscan-ocr.latest.es.js',
@@ -243,7 +338,7 @@ export const IntegrationGuide: React.FC = () => {
             <div className="flex items-center gap-2">
               <Globe className="w-4 h-4 text-blue-600" />
               <h3 className="text-sm font-semibold text-slate-900">
-                01. Remote Website &lt;script&gt; + Camera Auto-Capture (v{SCANNER_VERSION})
+                01. Remote Website &lt;script&gt; + Portrait/Signature Crop &amp; Specimen Detection (v{SCANNER_VERSION})
               </h3>
             </div>
             <button
@@ -274,7 +369,7 @@ export const IntegrationGuide: React.FC = () => {
             <div className="flex items-center gap-2">
               <Globe className="w-4 h-4 text-blue-600" />
               <h3 className="text-sm font-semibold text-slate-900">
-                02. Remote ES Module, Multilingual VIZ &amp; Pair Scan
+                02. Remote ES Module, Pair Scan &amp; Cancellation
               </h3>
             </div>
             <button
@@ -305,7 +400,7 @@ export const IntegrationGuide: React.FC = () => {
             <div className="flex items-center gap-2">
               <Terminal className="w-4 h-4 text-blue-600" />
               <h3 className="text-sm font-semibold text-slate-900">
-                03. VIZ Language Routing, Multi-Script &amp; Overrides
+                03. Standalone Validation, AAMVA Parser &amp; Viewport Cropping
               </h3>
             </div>
             <button

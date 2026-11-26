@@ -1,7 +1,20 @@
-import type { DocumentQuad, PerspectiveInfo, Point2D } from './types';
+import type { DocumentQuad, ImageSurface, PerspectiveInfo, Point2D } from './types';
 
 function clamp01(v: number): number {
   return Math.max(0, Math.min(1, v));
+}
+
+function getSourceDimensions(source: ImageSurface): { width: number; height: number } {
+  if (typeof HTMLImageElement !== 'undefined' && source instanceof HTMLImageElement) {
+    return {
+      width: Math.max(1, source.naturalWidth || source.width),
+      height: Math.max(1, source.naturalHeight || source.height),
+    };
+  }
+  return {
+    width: Math.max(1, source.width),
+    height: Math.max(1, source.height),
+  };
 }
 
 function dist(a: Point2D, b: Point2D): number {
@@ -49,7 +62,6 @@ export function orderQuadCorners(points: Point2D[]): DocumentQuad {
   const sorted = [...points].sort(
     (a, b) => Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx)
   );
-  // Angles around centroid start from top-left quadrant (-PI..-PI/2)
   const tlIdx = sorted.reduce(
     (bestIdx, p, idx, arr) =>
       p.x + p.y < arr[bestIdx].x + arr[bestIdx].y ? idx : bestIdx,
@@ -147,7 +159,6 @@ function fitOrthogonalLine(pts: Point2D[], fallbackA: Point2D, fallbackB: Point2
     cyy += dy * dy;
   }
 
-  // Normal corresponds to eigenvector of smallest eigenvalue of covariance matrix
   const trace = cxx + cyy;
   const detTerm = Math.sqrt(Math.max(0, (cxx - cyy) * (cxx - cyy) + 4 * cxy * cxy));
   const lambdaMin = 0.5 * (trace - detTerm);
@@ -239,15 +250,14 @@ function interiorAnglesDeg(quad: DocumentQuad): number[] {
 }
 
 /**
- * Signed margin test: returns true if point (px, py) lies inside the convex quad
- * OR within `marginPx` outside any edge. Works regardless of clockwise/CCW ring winding.
+ * Evaluates whether point (px, py) lies inside the convex quad, or its Euclidean
+ * exterior distance from the closest quad edge.
  */
-function isNearOrInsideConvexQuad(
+function quadExteriorDistance(
   px: number,
   py: number,
-  ringPx: [Point2D, Point2D, Point2D, Point2D],
-  marginPx: number
-): boolean {
+  ringPx: [Point2D, Point2D, Point2D, Point2D]
+): { inside: boolean; dist: number } {
   let sign = 0;
   let minDist = Infinity;
   let inside = true;
@@ -265,7 +275,7 @@ function isNearOrInsideConvexQuad(
     if (segD < minDist) minDist = segD;
   }
 
-  return inside || minDist <= marginPx;
+  return { inside, dist: inside ? 0 : minDist };
 }
 
 /**
@@ -315,13 +325,13 @@ function computeSideEdgeSupport(
 /**
  * Pure-JS 4-corner document quadrilateral detector.
  * Returns null if the image is already a tightly cropped / full-bleed flat scan
- * (or if no reliable document quad exists) so flat scans and MRZ zones are never over-cropped.
+ * (or if no reliable document quad exists) so flat scans and MRZ zones are never over-cropped,
+ * while reliably framing small or tilted ID cards in tall mobile camera photos.
  */
 export function detectDocumentQuad(
-  source: HTMLImageElement | HTMLCanvasElement
+  source: ImageSurface
 ): PerspectiveInfo | null {
-  const srcW = source instanceof HTMLImageElement ? source.naturalWidth || source.width : source.width;
-  const srcH = source instanceof HTMLImageElement ? source.naturalHeight || source.height : source.height;
+  const { width: srcW, height: srcH } = getSourceDimensions(source);
   if (srcW < 64 || srcH < 64) return null;
 
   const maxDim = 320;
@@ -339,8 +349,6 @@ export function detectDocumentQuad(
   const rgba = ctx.getImageData(0, 0, w, h).data;
   const nPix = w * h;
 
-  // 3x3 lightly smoothed R, G, B & luminance suppresses camera sensor noise and wood grain
-  // while keeping background homogeneity intact.
   const smoothR = new Float32Array(nPix);
   const smoothG = new Float32Array(nPix);
   const smoothB = new Float32Array(nPix);
@@ -376,8 +384,6 @@ export function detectDocumentQuad(
     }
   }
 
-  // Smoothed Sobel gradient + weighted unblurred max-RGB step gradient:
-  // keeps subtle 1px card edges on light desks sharp while ignoring single-pixel noise.
   const smoothGrad = new Float32Array(nPix);
   const smoothRgbEdge = new Float32Array(nPix);
   const edge = new Float32Array(nPix);
@@ -447,14 +453,12 @@ export function detectDocumentQuad(
     }
   }
 
-  // Sample all 4 border strips individually to test whether a consistent desk/table
-  // background actually surrounds the document rather than full-bleed printing.
   interface BorderSample {
     r: number;
     g: number;
     b: number;
     grad: number;
-    side: 0 | 1 | 2 | 3; // 0=top, 1=right, 2=bottom, 3=left
+    side: 0 | 1 | 2 | 3;
   }
   const borderSamples: BorderSample[] = [];
   const pushBorderSample = (idx: number, side: 0 | 1 | 2 | 3) => {
@@ -476,12 +480,11 @@ export function detectDocumentQuad(
     pushBorderSample(y * w + 2, 3);
   }
 
-  const smoothBorder = borderSamples.filter((s) => s.grad < 10.5);
+  const smoothBorder = borderSamples.filter((s) => s.grad < 13.0);
   if (smoothBorder.length < borderSamples.length * 0.45) {
     return null;
   }
 
-  // Find median RGB of smooth border pixels
   const rs = smoothBorder.map((s) => s.r).sort((a, b) => a - b);
   const gs = smoothBorder.map((s) => s.g).sort((a, b) => a - b);
   const bs = smoothBorder.map((s) => s.b).sort((a, b) => a - b);
@@ -496,7 +499,7 @@ export function detectDocumentQuad(
   for (const s of borderSamples) {
     sideTotals[s.side]++;
     const diff = Math.max(Math.abs(s.r - bgR), Math.abs(s.g - bgG), Math.abs(s.b - bgB));
-    if (s.grad < 12 && diff < 44) {
+    if (s.grad < 14 && diff < 56) {
       sideMatches[s.side]++;
       totalBgMatches++;
     }
@@ -504,18 +507,13 @@ export function detectDocumentQuad(
 
   const sideMatchRatios = sideTotals.map((tot, i) => (tot > 0 ? sideMatches[i] / tot : 0));
   const bgSidesCount = sideMatchRatios.filter((r) => r >= 0.45).length;
-  const strongBgSides = sideMatchRatios.filter((r) => r >= 0.65).length;
+  const strongBgSides = sideMatchRatios.filter((r) => r >= 0.62).length;
   const overallBgRatio = totalBgMatches / Math.max(1, borderSamples.length);
 
-  // Full-bleed passports (like a bottom cream MRZ margin + blue top + portrait left) only match
-  // background on 1-2 sides. A framed/skewed photo on a desk has background on >=3 sides.
-  if (bgSidesCount < 3 || (strongBgSides < 2 && overallBgRatio < 0.68)) {
+  if (bgSidesCount < 3 || (strongBgSides < 2 && overallBgRatio < 0.66)) {
     return null;
   }
 
-  // Precompute anti-pinhole edge ridge mask: blocks strong edges (>= 9.5) AND pixels (>= 6.5)
-  // sandwiched inside >= 2 strong 8-connected edge neighbors so 1px anti-aliased corner gaps
-  // cannot leak flood-fill into cream MRZ paper on light-colored desks.
   const strongBarrier = new Uint8Array(nPix);
   for (let i = 0; i < nPix; i++) {
     if (edge[i] >= 9.5) strongBarrier[i] = 1;
@@ -543,8 +541,6 @@ export function detectDocumentQuad(
     }
   }
 
-  // Flood-fill background from perimeter seeds using smoothed colors so camera grain on desks
-  // traverses cleanly while document border edges stop the fill tightly.
   const bgMask = new Uint8Array(nPix);
   const queue = new Int32Array(nPix);
   let qHead = 0;
@@ -559,7 +555,7 @@ export function detectDocumentQuad(
 
   const trySeed = (pixIdx: number) => {
     if (bgMask[pixIdx] || barrierMask[pixIdx]) return;
-    if (edge[pixIdx] < 10.5 && colorDistToBg(pixIdx) < 42) {
+    if (edge[pixIdx] < 11.5 && colorDistToBg(pixIdx) < 52) {
       bgMask[pixIdx] = 1;
       queue[qTail++] = pixIdx;
     }
@@ -576,7 +572,7 @@ export function detectDocumentQuad(
 
   if (qTail === 0) return null;
 
-  const maxBgColorShift = 46;
+  const maxBgColorShift = 60;
   const stepColorJump = 14;
 
   while (qHead < qTail) {
@@ -611,8 +607,6 @@ export function detectDocumentQuad(
     }
   }
 
-  // Foreground is everything NOT reached by background flood-fill.
-  // Find largest 4-connected foreground component.
   const visited = new Uint8Array(nPix);
   const compQueue = new Int32Array(nPix);
   let bestPixels: number[] = [];
@@ -654,11 +648,10 @@ export function detectDocumentQuad(
   }
 
   const rawAreaRatio = bestPixels.length / nPix;
-  if (rawAreaRatio < 0.14 || rawAreaRatio > 0.93) {
+  if (rawAreaRatio < 0.06 || rawAreaRatio > 0.93) {
     return null;
   }
 
-  // Build mask for largest component and extract perimeter boundary points
   const fgMask = new Uint8Array(nPix);
   for (let i = 0; i < bestPixels.length; i++) {
     fgMask[bestPixels[i]] = 1;
@@ -695,14 +688,12 @@ export function detectDocumentQuad(
     Math.max(4, Math.min(w, h) * 0.035)
   );
 
-  // Convert back to normalized [0..1] coordinates
   const normPts = refinedPx.map((p) => ({
     x: clamp01(p.x / w),
     y: clamp01(p.y / h),
   }));
   const quad = orderQuadCorners(normPts);
 
-  // Geometric validity checks
   const angles = interiorAnglesDeg(quad);
   if (angles.some((a) => a < 46 || a > 134)) {
     return null;
@@ -714,11 +705,10 @@ export function detectDocumentQuad(
     quad.bottomRight,
     quad.bottomLeft,
   ]);
-  if (quadAreaRatio < 0.14 || quadAreaRatio > 0.93) {
+  if (quadAreaRatio < 0.06 || quadAreaRatio > 0.93) {
     return null;
   }
 
-  // Guard 1: Reject frame-hugging partial cuts (e.g. top+left+right hugging borders while slicing MRZ)
   const borderTol = 0.028;
   const nearTop = (p: Point2D) => p.y <= borderTol;
   const nearRight = (p: Point2D) => p.x >= 1 - borderTol;
@@ -746,7 +736,6 @@ export function detectDocumentQuad(
     return null;
   }
 
-  // Guard 2: Verify every interior quad side follows a real collinear physical edge
   const ringPx: [Point2D, Point2D, Point2D, Point2D] = [
     { x: quad.topLeft.x * w, y: quad.topLeft.y * h },
     { x: quad.topRight.x * w, y: quad.topRight.y * h },
@@ -760,18 +749,24 @@ export function detectDocumentQuad(
     const sup = computeSideEdgeSupport(ringPx[i], ringPx[(i + 1) % 4], edge, w, h);
     interiorEdgeSupports.push(sup);
   }
-  if (interiorEdgeSupports.length > 0) {
-    const minEdgeSup = Math.min(...interiorEdgeSupports);
-    const meanEdgeSup =
-      interiorEdgeSupports.reduce((s, v) => s + v, 0) / interiorEdgeSupports.length;
-    if (minEdgeSup < 0.42 || meanEdgeSup < 0.56) {
-      return null;
-    }
+  const minEdgeSup = interiorEdgeSupports.length > 0 ? Math.min(...interiorEdgeSupports) : 0;
+  const meanEdgeSup =
+    interiorEdgeSupports.length > 0
+      ? interiorEdgeSupports.reduce((s, v) => s + v, 0) / interiorEdgeSupports.length
+      : 0;
+  if (interiorEdgeSupports.length > 0 && (minEdgeSup < 0.42 || meanEdgeSup < 0.56)) {
+    return null;
   }
 
-  // Guard 3: Excluded-region ink & disconnected glyph-island check using smoothed pixels so
-  // camera sensor grain / wood desk texture passes cleanly while cropped MRZ text/ink is rejected.
+  const isFullyFramedCard =
+    insetCornersCount === 4 &&
+    frameHuggingSides === 0 &&
+    quadAreaRatio < 0.72 &&
+    minEdgeSup >= 0.46 &&
+    meanEdgeSup >= 0.6;
+
   const marginPx = 3.5;
+  const moatMaxPx = isFullyFramedCard ? 22 : Infinity;
   const outsideVisited = new Uint8Array(nPix);
   const bgLum = 0.299 * bgR + 0.587 * bgG + 0.114 * bgB;
   let outsidePixels = 0;
@@ -783,7 +778,8 @@ export function detectDocumentQuad(
     const rowOff = y * w;
     for (let x = 1; x < w - 1; x++) {
       const idx = rowOff + x;
-      if (isNearOrInsideConvexQuad(x, y, ringPx, marginPx)) continue;
+      const ext = quadExteriorDistance(x, y, ringPx);
+      if (ext.inside || ext.dist <= marginPx || ext.dist > moatMaxPx) continue;
 
       outsidePixels++;
       const gVal = smoothRgbEdge[idx];
@@ -798,7 +794,6 @@ export function detectDocumentQuad(
       }
 
       if (!bgMask[idx] && !outsideVisited[idx]) {
-        // Count compact disconnected foreground islands strictly outside the expanded quad
         let head = 0;
         let tail = 0;
         outsideVisited[idx] = 1;
@@ -820,12 +815,9 @@ export function detectDocumentQuad(
           ];
           for (let k = 0; k < 4; k++) {
             const nxt = nbrs[k];
-            if (
-              nxt >= 0 &&
-              !bgMask[nxt] &&
-              !outsideVisited[nxt] &&
-              !isNearOrInsideConvexQuad(nxt % w, (nxt / w) | 0, ringPx, marginPx)
-            ) {
+            if (nxt < 0 || bgMask[nxt] || outsideVisited[nxt]) continue;
+            const nExt = quadExteriorDistance(nxt % w, (nxt / w) | 0, ringPx);
+            if (!nExt.inside && nExt.dist > marginPx && nExt.dist <= moatMaxPx) {
               outsideVisited[nxt] = 1;
               compQueue[tail++] = nxt;
             }
@@ -841,7 +833,15 @@ export function detectDocumentQuad(
 
   if (outsidePixels > 0) {
     const outsideEdgeRatio = outsideHighContrastEdges / outsidePixels;
-    if (
+    if (isFullyFramedCard) {
+      if (
+        outsideFgComponents >= 8 ||
+        outsideDarkInk >= Math.max(28, Math.round(nPix * 0.0028)) ||
+        outsideEdgeRatio > 0.025
+      ) {
+        return null;
+      }
+    } else if (
       outsideFgComponents >= 7 ||
       outsideDarkInk >= Math.max(24, Math.round(nPix * 0.0025)) ||
       outsideEdgeRatio > 0.015 ||
@@ -875,7 +875,6 @@ export function detectDocumentQuad(
     return null;
   }
 
-  // Decide whether perspective warp / background crop is actually meaningful
   const topAngle = Math.atan2(
     (quad.topRight.y - quad.topLeft.y) * srcH,
     (quad.topRight.x - quad.topLeft.x) * srcW
@@ -992,13 +991,11 @@ function solveHomography(
  * and returns a crisp rectangular canvas sized for high-accuracy OCR.
  */
 export function warpDocumentPerspective(
-  source: HTMLImageElement | HTMLCanvasElement,
+  source: ImageSurface,
   corners: DocumentQuad
 ): HTMLCanvasElement {
-  const natW = source instanceof HTMLImageElement ? source.naturalWidth || source.width : source.width;
-  const natH = source instanceof HTMLImageElement ? source.naturalHeight || source.height : source.height;
+  const { width: natW, height: natH } = getSourceDimensions(source);
 
-  // Render source onto an accessible canvas capped at 2400px max dim for fast bilinear sampling
   const srcScale = Math.min(1, 2400 / Math.max(1, natW, natH));
   const sw = Math.max(1, Math.round(natW * srcScale));
   const sh = Math.max(1, Math.round(natH * srcScale));
@@ -1024,7 +1021,6 @@ export function warpDocumentPerspective(
   const rawOutW = Math.max(64, Math.round(Math.max(widthTop, widthBot)));
   const rawOutH = Math.max(64, Math.round(Math.max(heightLeft, heightRight)));
 
-  // Normalize output resolution into [1500..2100] longest/width range for crisp OCR
   let outScale = 1;
   if (rawOutW < 1500) {
     outScale = Math.min(2.6, 1750 / rawOutW);

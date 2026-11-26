@@ -1,7 +1,7 @@
 {
   "name": "docscan-ocr",
   "private": true,
-  "version": "0.0.4",
+  "version": "0.0.7",
   "type": "module",
   "main": "./public/lib/docscan-ocr.latest.umd.js",
   "module": "./public/lib/docscan-ocr.latest.es.js",
@@ -31,6 +31,7 @@
     "@google/genai": "^2.4.0",
     "@tailwindcss/vite": "^4.3.3",
     "@vitejs/plugin-react": "^6.1.1",
+    "@zxing/library": "^0.23.0",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
     "lucide-react": "^0.546.0",

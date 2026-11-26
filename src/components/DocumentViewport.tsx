@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Camera,
   CheckCircle2,
@@ -7,16 +7,20 @@ import {
   FileImage,
   Layers,
   Loader2,
+  QrCode,
   RotateCw,
   ScanLine,
   ScanText,
   SlidersHorizontal,
   Sparkles,
+  SwitchCamera,
   Upload,
+  UserSquare2,
   X,
 } from 'lucide-react';
 import {
   CameraAutoCapture,
+  computeVisibleVideoCrop,
   type DocumentQuad,
   type ExtractedIdentity,
   type ImageQualityReport,
@@ -31,6 +35,12 @@ export type InputMode = 'upload' | 'camera' | 'specimen';
 export type ScanMode = 'single' | 'pair';
 export type PreviewLayer = 'original' | 'enhanced' | 'mrz';
 
+interface CameraDeviceOption {
+  deviceId: string;
+  label: string;
+  facingHint: 'back' | 'front' | 'other';
+}
+
 const DEFAULT_QUAD: DocumentQuad = {
   topLeft: { x: 0.08, y: 0.08 },
   topRight: { x: 0.92, y: 0.08 },
@@ -39,6 +49,72 @@ const DEFAULT_QUAD: DocumentQuad = {
 };
 
 type CornerKey = keyof DocumentQuad;
+
+function classifyCameraFacing(label: string): 'back' | 'front' | 'other' {
+  if (/\b(?:back|rear|environment|macro|tele|wide)\b/i.test(label)) {
+    return 'back';
+  }
+  if (/\b(?:front|user|selfie|facetime)\b/i.test(label)) {
+    return 'front';
+  }
+  return 'other';
+}
+
+function buildCameraOptions(devices: MediaDeviceInfo[]): CameraDeviceOption[] {
+  const videoInputs = devices.filter((d) => d.kind === 'videoinput' && d.deviceId.trim().length > 0);
+  const rawList = videoInputs.map((device, index) => {
+    const trimmed = device.label.trim();
+    const facingHint = classifyCameraFacing(trimmed);
+    return {
+      deviceId: device.deviceId,
+      rawLabel: trimmed,
+      facingHint,
+      originalIndex: index,
+    };
+  });
+
+  const labelCounts = new Map<string, number>();
+  for (const item of rawList) {
+    if (item.rawLabel) {
+      labelCounts.set(item.rawLabel, (labelCounts.get(item.rawLabel) ?? 0) + 1);
+    }
+  }
+  const seenCounts = new Map<string, number>();
+
+  const formatted: Array<CameraDeviceOption & { originalIndex: number }> = rawList.map((item) => {
+    let label = item.rawLabel;
+    if (!label) {
+      label = `Camera ${item.originalIndex + 1}`;
+    } else if ((labelCounts.get(label) ?? 0) > 1) {
+      const next = (seenCounts.get(label) ?? 0) + 1;
+      seenCounts.set(label, next);
+      label = `${label} (#${next})`;
+    }
+    return {
+      deviceId: item.deviceId,
+      label,
+      facingHint: item.facingHint,
+      originalIndex: item.originalIndex,
+    };
+  });
+
+  const rank: Record<CameraDeviceOption['facingHint'], number> = {
+    back: 0,
+    other: 1,
+    front: 2,
+  };
+
+  formatted.sort((a, b) => {
+    const rDiff = rank[a.facingHint] - rank[b.facingHint];
+    return rDiff !== 0 ? rDiff : a.originalIndex - b.originalIndex;
+  });
+
+  return formatted.map(({ deviceId, label, facingHint }) => ({
+    deviceId,
+    label,
+    facingHint,
+  }));
+}
 
 interface DocumentViewportProps {
   scanMode: ScanMode;
@@ -57,6 +133,8 @@ interface DocumentViewportProps {
   manualCorners: DocumentQuad | null;
   preprocess: boolean;
   enhanceMrzPass: boolean;
+  enableBarcodePass: boolean;
+  extractMedia: boolean;
   mrzModel: MrzOcrModel;
   vizLanguageMode: VizLanguageMode;
   useCustomVizLanguages: boolean;
@@ -72,11 +150,14 @@ interface DocumentViewportProps {
   onChangeManualCorners: (corners: DocumentQuad | null) => void;
   onTogglePreprocess: (val: boolean) => void;
   onToggleMrzPass: (val: boolean) => void;
+  onToggleBarcodePass: (val: boolean) => void;
+  onToggleExtractMedia: (val: boolean) => void;
   onChangeMrzModel: (model: MrzOcrModel) => void;
   onChangeVizLanguageMode: (mode: VizLanguageMode) => void;
   onToggleCustomVizLanguages: (enabled: boolean) => void;
   onChangeCustomVizLanguages: (lang: string) => void;
   onTriggerScan: () => void;
+  onCancelScan: () => void;
 }
 
 export const DocumentViewport: React.FC<DocumentViewportProps> = ({
@@ -96,6 +177,8 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
   manualCorners,
   preprocess,
   enhanceMrzPass,
+  enableBarcodePass,
+  extractMedia,
   mrzModel,
   vizLanguageMode,
   useCustomVizLanguages,
@@ -111,17 +194,23 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
   onChangeManualCorners,
   onTogglePreprocess,
   onToggleMrzPass,
+  onToggleBarcodePass,
+  onToggleExtractMedia,
   onChangeMrzModel,
   onChangeVizLanguageMode,
   onToggleCustomVizLanguages,
   onChangeCustomVizLanguages,
   onTriggerScan,
+  onCancelScan,
 }) => {
   const [inputMode, setInputMode] = useState<InputMode>('upload');
   const [previewLayer, setPreviewLayer] = useState<PreviewLayer>('original');
   const [isDragging, setIsDragging] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [cameraActive, setCameraActive] = useState(false);
+  const [isSwitchingCamera, setIsSwitchingCamera] = useState(false);
+  const [availableCameras, setAvailableCameras] = useState<CameraDeviceOption[]>([]);
+  const [selectedCameraId, setSelectedCameraId] = useState<string>('');
   const [cameraTargetSide, setCameraTargetSide] = useState<'single' | 'front' | 'back'>('single');
   const [autoCaptureEnabled, setAutoCaptureEnabled] = useState(true);
   const [liveQuality, setLiveQuality] = useState<ImageQualityReport | null>(null);
@@ -138,6 +227,8 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
   const autoCaptureRef = useRef<CameraAutoCapture | null>(null);
   const autoCaptureEnabledRef = useRef(autoCaptureEnabled);
   const cameraTargetRef = useRef(cameraTargetSide);
+  const selectedCameraIdRef = useRef(selectedCameraId);
+  const cameraRequestSeqRef = useRef(0);
   const cornerOverlayRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -148,7 +239,39 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
     cameraTargetRef.current = cameraTargetSide;
   }, [cameraTargetSide]);
 
-  const stopCamera = () => {
+  useEffect(() => {
+    selectedCameraIdRef.current = selectedCameraId;
+  }, [selectedCameraId]);
+
+  const refreshCameraDevices = useCallback(async (): Promise<CameraDeviceOption[]> => {
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.enumerateDevices) {
+      return [];
+    }
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const options = buildCameraOptions(devices);
+      setAvailableCameras(options);
+      return options;
+    } catch {
+      return [];
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshCameraDevices();
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.addEventListener) {
+      return;
+    }
+    const handleDeviceChange = () => {
+      void refreshCameraDevices();
+    };
+    navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange);
+    return () => {
+      navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange);
+    };
+  }, [refreshCameraDevices]);
+
+  const stopStreamOnly = useCallback(() => {
     if (autoCaptureRef.current) {
       autoCaptureRef.current.stop();
       autoCaptureRef.current = null;
@@ -157,10 +280,19 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
     }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+  }, []);
+
+  const stopCamera = useCallback(() => {
+    cameraRequestSeqRef.current += 1;
+    stopStreamOnly();
     setCameraActive(false);
+    setIsSwitchingCamera(false);
     setLiveQuality(null);
     setStabilityProgress(0);
-  };
+  }, [stopStreamOnly]);
 
   useEffect(() => {
     if (inputMode !== 'camera') {
@@ -169,7 +301,7 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
     return () => {
       stopCamera();
     };
-  }, [inputMode]);
+  }, [inputMode, stopCamera]);
 
   useEffect(() => {
     if (!result?.previews) {
@@ -188,9 +320,12 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
       autoCaptureRef.current.stop();
     }
     const watcher = new CameraAutoCapture(videoEl, {
-      sampleIntervalMs: 180,
-      requiredStableFrames: 3,
+      sampleIntervalMs: 170,
+      requiredStableFrames: 2,
+      minSharpness: 22,
+      maxMotionDelta: 8.5,
       stopOnCapture: false,
+      captureRegion: () => computeVisibleVideoCrop(videoEl),
       onQualityUpdate: (report, stabProgress) => {
         setLiveQuality(report);
         setStabilityProgress(autoCaptureEnabledRef.current ? stabProgress : 0);
@@ -211,16 +346,50 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
     watcher.start();
   };
 
-  const startCamera = async (target: 'single' | 'front' | 'back' = 'single') => {
+  const startCamera = async (
+    target: 'single' | 'front' | 'back' = 'single',
+    overrideDeviceId?: string
+  ) => {
     setCameraTargetSide(target);
     cameraTargetRef.current = target;
     setCameraError(null);
+
     if (!navigator.mediaDevices?.getUserMedia) {
       setCameraError('Camera capture is not supported in this browser context.');
       return;
     }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
+
+    const requestId = ++cameraRequestSeqRef.current;
+    const desiredDeviceId =
+      overrideDeviceId !== undefined ? overrideDeviceId : selectedCameraIdRef.current;
+
+    // Release active hardware session before requesting a new camera lens (avoids Android NotReadableError)
+    stopStreamOnly();
+    setIsSwitchingCamera(true);
+
+    const acquireStream = async (): Promise<MediaStream> => {
+      if (desiredDeviceId) {
+        try {
+          return await navigator.mediaDevices.getUserMedia({
+            video: {
+              deviceId: { exact: desiredDeviceId },
+              width: { ideal: 1920 },
+              height: { ideal: 1080 },
+            },
+            audio: false,
+          });
+        } catch {
+          return await navigator.mediaDevices.getUserMedia({
+            video: {
+              deviceId: { ideal: desiredDeviceId },
+              width: { ideal: 1920 },
+              height: { ideal: 1080 },
+            },
+            audio: false,
+          });
+        }
+      }
+      return await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: 'environment',
           width: { ideal: 1920 },
@@ -228,15 +397,60 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
         },
         audio: false,
       });
+    };
+
+    try {
+      const stream = await acquireStream();
+
+      if (cameraRequestSeqRef.current !== requestId) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+
+      const videoTrack = stream.getVideoTracks()[0];
+      if (videoTrack && typeof videoTrack.applyConstraints === 'function') {
+        try {
+          await videoTrack.applyConstraints({
+            advanced: [{ focusMode: 'continuous' } as unknown as MediaTrackConstraintSet],
+          });
+        } catch {
+          // Ignore unsupported focusMode constraints on desktop webcams
+        }
+      }
+
       streamRef.current = stream;
       setCameraActive(true);
+      setIsSwitchingCamera(false);
+
+      // Permission is now granted — enumerate all rear/wide/macro/front lenses on the phone
+      const enumerated = await refreshCameraDevices();
+      if (cameraRequestSeqRef.current !== requestId) {
+        return;
+      }
+
+      const activeDeviceId = videoTrack?.getSettings?.().deviceId;
+      if (activeDeviceId && enumerated.some((cam) => cam.deviceId === activeDeviceId)) {
+        setSelectedCameraId(activeDeviceId);
+        selectedCameraIdRef.current = activeDeviceId;
+      } else if (desiredDeviceId && enumerated.some((cam) => cam.deviceId === desiredDeviceId)) {
+        setSelectedCameraId(desiredDeviceId);
+        selectedCameraIdRef.current = desiredDeviceId;
+      }
+
       requestAnimationFrame(() => {
+        if (cameraRequestSeqRef.current !== requestId) return;
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
+          void videoRef.current.play().catch(() => {
+            // Ignore autoplay restriction errors when already user-initiated
+          });
           startAutoCaptureWatcher(videoRef.current);
         }
       });
     } catch (err) {
+      if (cameraRequestSeqRef.current !== requestId) return;
+      setIsSwitchingCamera(false);
+      setCameraActive(false);
       setCameraError(
         err instanceof Error
           ? err.message
@@ -245,26 +459,53 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
     }
   };
 
+  const handleSelectCamera = (nextDeviceId: string) => {
+    setSelectedCameraId(nextDeviceId);
+    selectedCameraIdRef.current = nextDeviceId;
+    if (cameraActive) {
+      void startCamera(cameraTargetRef.current, nextDeviceId);
+    }
+  };
+
+  const handleCycleCamera = () => {
+    if (availableCameras.length <= 1 || isSwitchingCamera) return;
+    const currentIdx = availableCameras.findIndex((cam) => cam.deviceId === selectedCameraId);
+    const nextIdx = currentIdx >= 0 ? (currentIdx + 1) % availableCameras.length : 0;
+    const nextCam = availableCameras[nextIdx];
+    if (nextCam) {
+      handleSelectCamera(nextCam.deviceId);
+    }
+  };
+
   const captureCameraFrame = () => {
     const video = videoRef.current;
     if (!video || !video.videoWidth || !video.videoHeight) return;
 
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    const visibleCrop = computeVisibleVideoCrop(video);
+    const sx = visibleCrop ? Math.max(0, Math.round(visibleCrop.x * vw)) : 0;
+    const sy = visibleCrop ? Math.max(0, Math.round(visibleCrop.y * vh)) : 0;
+    const sw = visibleCrop ? Math.min(vw - sx, Math.max(16, Math.round(visibleCrop.width * vw))) : vw;
+    const sh = visibleCrop ? Math.min(vh - sy, Math.max(16, Math.round(visibleCrop.height * vh))) : vh;
+
     const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    canvas.width = sw;
+    canvas.height = sh;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    ctx.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
     canvas.toBlob((blob) => {
       if (!blob) return;
+      const target = cameraTargetRef.current;
       const file = new File([blob], `camera-capture-${Date.now()}.png`, {
         type: 'image/png',
       });
       stopCamera();
       setInputMode('upload');
-      if (cameraTargetSide === 'front' || cameraTargetSide === 'back') {
-        onSelectPairFile(cameraTargetSide, file);
+      if (target === 'front' || target === 'back') {
+        onSelectPairFile(target, file);
       } else {
         onSelectFile(file);
       }
@@ -437,11 +678,18 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
         {file && (
           <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500">
             <span className="truncate font-medium text-slate-700">{file.name}</span>
-            {sideResult?.mrz && (
-              <span className="font-mono text-emerald-700 shrink-0">
-                MRZ {sideResult.mrz.validCount}/{sideResult.mrz.totalChecks}
-              </span>
-            )}
+            <div className="flex items-center gap-2 shrink-0">
+              {sideResult?.barcode && (
+                <span className="font-mono text-indigo-700">
+                  {sideResult.barcode.aamva ? 'AAMVA' : 'PDF417'}
+                </span>
+              )}
+              {sideResult?.mrz && (
+                <span className="font-mono text-emerald-700">
+                  MRZ {sideResult.mrz.validCount}/{sideResult.mrz.totalChecks}
+                </span>
+              )}
+            </div>
           </div>
         )}
 
@@ -554,88 +802,152 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
         {inputMode === 'camera' && (
           <div className="border border-slate-200 rounded-lg bg-slate-950 overflow-hidden">
             {cameraActive ? (
-              <div className="relative aspect-16/10 w-full bg-slate-950">
-                <video
-                  ref={videoRef}
-                  autoPlay
-                  playsInline
-                  muted
-                  className="w-full h-full object-cover"
-                />
+              <div className="flex flex-col bg-slate-950">
+                <div
+                  onClick={captureCameraFrame}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      captureCameraFrame();
+                    }
+                  }}
+                  aria-label="Camera viewfinder — tap anywhere to capture framed document"
+                  className="relative aspect-[4/3] sm:aspect-[16/10] w-full bg-slate-950 overflow-hidden cursor-pointer block"
+                >
+                  <video
+                    ref={videoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    className="absolute inset-0 w-full h-full object-cover"
+                  />
 
-                {/* Live Detected Document Quad Overlay */}
-                {liveQuality?.detectedCorners && (
-                  <svg
-                    viewBox="0 0 100 100"
-                    preserveAspectRatio="none"
-                    className="pointer-events-none absolute inset-0 w-full h-full"
-                  >
-                    <polygon
-                      points={`${liveQuality.detectedCorners.topLeft.x * 100},${liveQuality.detectedCorners.topLeft.y * 100} ${liveQuality.detectedCorners.topRight.x * 100},${liveQuality.detectedCorners.topRight.y * 100} ${liveQuality.detectedCorners.bottomRight.x * 100},${liveQuality.detectedCorners.bottomRight.y * 100} ${liveQuality.detectedCorners.bottomLeft.x * 100},${liveQuality.detectedCorners.bottomLeft.y * 100}`}
-                      fill={
-                        liveQuality.passed
-                          ? 'rgba(16, 185, 129, 0.14)'
-                          : 'rgba(245, 158, 11, 0.12)'
-                      }
-                      stroke={liveQuality.passed ? '#10b981' : '#f59e0b'}
-                      strokeWidth="0.7"
-                      vectorEffect="non-scaling-stroke"
-                    />
-                  </svg>
-                )}
-
-                {/* Top Live Guidance Pill */}
-                <div className="pointer-events-none absolute top-3 left-3 right-3 flex items-center justify-between gap-2">
-                  <div
-                    className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-2 backdrop-blur-sm ${
-                      liveQuality?.passed
-                        ? 'bg-emerald-950/80 text-emerald-100 border border-emerald-500/50'
-                        : 'bg-slate-900/80 text-slate-100 border border-white/15'
-                    }`}
-                  >
-                    {liveQuality?.passed && (
-                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                    )}
-                    <span>
-                      {liveQuality?.guidance ?? 'Align passport or ID card inside frame…'}
-                    </span>
-                  </div>
-
-                  {liveQuality && (
-                    <div className="px-2.5 py-1.5 rounded-lg bg-slate-900/80 border border-white/15 text-[11px] font-mono tabular-nums text-slate-200 backdrop-blur-sm flex items-center gap-2.5 shrink-0">
-                      <span>Sharp {liveQuality.sharpnessScore}</span>
-                      <span>Glare {Math.round(liveQuality.glareRatio * 100)}%</span>
-                      <span>Lum {liveQuality.meanBrightness}</span>
+                  {isSwitchingCamera && (
+                    <div className="pointer-events-none absolute inset-0 bg-slate-950/65 flex items-center justify-center gap-2 text-xs font-medium text-white">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Switching camera lens…</span>
                     </div>
                   )}
+
+                  {liveQuality?.detectedCorners && !isSwitchingCamera && (
+                    <svg
+                      viewBox="0 0 100 100"
+                      preserveAspectRatio="none"
+                      className="pointer-events-none absolute inset-0 w-full h-full"
+                    >
+                      <polygon
+                        points={`${liveQuality.detectedCorners.topLeft.x * 100},${liveQuality.detectedCorners.topLeft.y * 100} ${liveQuality.detectedCorners.topRight.x * 100},${liveQuality.detectedCorners.topRight.y * 100} ${liveQuality.detectedCorners.bottomRight.x * 100},${liveQuality.detectedCorners.bottomRight.y * 100} ${liveQuality.detectedCorners.bottomLeft.x * 100},${liveQuality.detectedCorners.bottomLeft.y * 100}`}
+                        fill={
+                          liveQuality.passed
+                            ? 'rgba(16, 185, 129, 0.14)'
+                            : 'rgba(245, 158, 11, 0.12)'
+                        }
+                        stroke={liveQuality.passed ? '#10b981' : '#f59e0b'}
+                        strokeWidth="0.7"
+                        vectorEffect="non-scaling-stroke"
+                      />
+                    </svg>
+                  )}
+
+                  <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-4">
+                    <div
+                      className={`relative w-[86%] max-w-[440px] aspect-[1.586/1] max-h-[72%] border-2 border-dashed rounded-lg transition-colors ${
+                        liveQuality?.passed
+                          ? 'border-emerald-400'
+                          : liveQuality?.hasGlare || liveQuality?.exposureStatus !== 'ok'
+                            ? 'border-amber-400/80'
+                            : 'border-white/75'
+                      }`}
+                    >
+                      <span className="absolute -bottom-5 left-1/2 -translate-x-1/2 text-[10px] font-medium text-white/85 whitespace-nowrap drop-shadow">
+                        Fill frame · Tap shutter or tap video to capture
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="pointer-events-none absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between gap-2">
+                    <div
+                      className={`px-2.5 py-1 rounded-lg text-xs font-medium flex items-center gap-1.5 backdrop-blur-sm min-w-0 ${
+                        liveQuality?.passed
+                          ? 'bg-emerald-950/85 text-emerald-100 border border-emerald-500/50'
+                          : 'bg-slate-900/80 text-slate-100 border border-white/15'
+                      }`}
+                    >
+                      {liveQuality?.passed && (
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                      )}
+                      <span className="truncate">
+                        {liveQuality?.guidance ?? 'Align document inside guide…'}
+                      </span>
+                    </div>
+
+                    {liveQuality && (
+                      <div className="hidden sm:flex px-2 py-1 rounded-lg bg-slate-900/80 border border-white/15 text-[11px] font-mono tabular-nums text-slate-200 backdrop-blur-sm items-center gap-2 shrink-0">
+                        <span>Sharp {liveQuality.sharpnessScore}</span>
+                        <span>Glare {Math.round(liveQuality.glareRatio * 100)}%</span>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
-                {/* Framing Box */}
-                <div
-                  className={`pointer-events-none absolute inset-x-8 inset-y-12 border-2 border-dashed rounded-lg transition-colors ${
-                    liveQuality?.passed
-                      ? 'border-emerald-400'
-                      : liveQuality?.hasGlare || liveQuality?.exposureStatus !== 'ok'
-                        ? 'border-amber-400/80'
-                        : 'border-white/60'
-                  }`}
-                />
+                {/* Camera Lens Selector Bar */}
+                {availableCameras.length > 0 && (
+                  <div className="px-4 py-2 bg-slate-900 border-t border-white/10 flex items-center gap-2">
+                    <label
+                      htmlFor="live-camera-select"
+                      className="text-[11px] font-medium text-slate-400 whitespace-nowrap shrink-0 flex items-center gap-1.5"
+                    >
+                      <SwitchCamera className="w-3.5 h-3.5 text-slate-300" />
+                      <span className="hidden sm:inline">Camera:</span>
+                    </label>
+                    <select
+                      id="live-camera-select"
+                      aria-label="Select camera lens"
+                      value={selectedCameraId}
+                      disabled={isSwitchingCamera}
+                      onChange={(e) => handleSelectCamera(e.target.value)}
+                      className="flex-1 min-w-0 text-xs font-medium text-slate-100 bg-slate-800 border border-slate-700 rounded-md px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50"
+                    >
+                      {!selectedCameraId && (
+                        <option value="">Rear Camera (Auto)</option>
+                      )}
+                      {availableCameras.map((cam, idx) => (
+                        <option key={cam.deviceId} value={cam.deviceId}>
+                          {cam.label || `Camera ${idx + 1}`}
+                        </option>
+                      ))}
+                    </select>
+                    {availableCameras.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={handleCycleCamera}
+                        disabled={isSwitchingCamera}
+                        title="Switch to next camera"
+                        className="px-2.5 py-1.5 text-xs font-medium text-slate-100 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-md transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5 disabled:opacity-50"
+                      >
+                        <SwitchCamera className="w-3.5 h-3.5" />
+                        <span>Switch ({availableCameras.length})</span>
+                      </button>
+                    )}
+                  </div>
+                )}
 
-                {/* Bottom Auto-Capture Lock Bar & Controls */}
-                <div className="absolute bottom-3 left-3 right-3 flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex items-center gap-2 bg-slate-900/80 border border-white/15 rounded-lg px-3 py-1.5 backdrop-blur-sm">
+                <div className="px-4 py-3 bg-slate-950 border-t border-white/10 flex items-center justify-between gap-3">
+                  <div className="flex flex-col gap-1 min-w-[115px]">
                     <button
                       type="button"
                       onClick={() => setAutoCaptureEnabled((prev) => !prev)}
-                      className={`text-xs font-semibold flex items-center gap-1.5 transition-colors ${
+                      className={`text-xs font-semibold flex items-center gap-1.5 transition-colors text-left ${
                         autoCaptureEnabled ? 'text-emerald-300' : 'text-slate-300'
                       }`}
                     >
-                      <Sparkles className="w-3.5 h-3.5" />
-                      Auto-Capture: {autoCaptureEnabled ? 'ON' : 'OFF'}
+                      <Sparkles className="w-3.5 h-3.5 shrink-0" />
+                      <span>Auto: {autoCaptureEnabled ? 'ON' : 'OFF'}</span>
                     </button>
                     {autoCaptureEnabled && (
-                      <div className="w-20 h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                      <div className="w-24 h-1.5 bg-slate-800 rounded-full overflow-hidden">
                         <div
                           className="h-full bg-emerald-400 transition-all duration-150"
                           style={{ width: `${Math.round(stabilityProgress * 100)}%` }}
@@ -644,20 +956,29 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
                     )}
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={captureCameraFrame}
+                    disabled={isSwitchingCamera}
+                    aria-label="Capture Photo"
+                    title="Capture framed photo now"
+                    className="w-12 h-12 rounded-full bg-white text-slate-950 ring-4 ring-white/25 hover:bg-slate-100 active:scale-90 disabled:opacity-50 transition-all flex items-center justify-center shrink-0 shadow-md"
+                  >
+                    <Camera className="w-5 h-5" />
+                  </button>
+
+                  <div className="flex items-center justify-end min-w-[115px]">
                     <button
                       type="button"
-                      onClick={stopCamera}
-                      className="px-3 py-2 text-xs font-medium text-slate-200 bg-slate-900/80 hover:bg-slate-800 rounded-lg transition-colors whitespace-nowrap"
+                      onClick={() => {
+                        stopCamera();
+                        if (scanMode === 'pair') {
+                          setInputMode('upload');
+                        }
+                      }}
+                      className="px-3.5 py-2 text-xs font-medium text-slate-200 bg-slate-800 hover:bg-slate-700 rounded-lg transition-colors whitespace-nowrap"
                     >
                       Stop
-                    </button>
-                    <button
-                      type="button"
-                      onClick={captureCameraFrame}
-                      className="px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors whitespace-nowrap"
-                    >
-                      Capture Photo
                     </button>
                   </div>
                 </div>
@@ -670,18 +991,42 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
                     Live Camera Auto-Capture &amp; Quality Gate
                   </p>
                   <p className="text-xs text-slate-400 mt-1">
-                    Automatically measures focus sharpness, glare hotspots, lighting, and hold steadiness before firing the shutter.
+                    Automatically crops to the viewfinder frame and measures focus sharpness, glare hotspots, lighting, and steadiness before triggering capture.
                   </p>
                 </div>
+                {availableCameras.length > 0 && (
+                  <div className="w-full max-w-xs flex flex-col gap-1.5 mt-1 text-left">
+                    <label
+                      htmlFor="pre-camera-select"
+                      className="text-[11px] font-medium text-slate-400"
+                    >
+                      Preferred Camera
+                    </label>
+                    <select
+                      id="pre-camera-select"
+                      value={selectedCameraId}
+                      onChange={(e) => handleSelectCamera(e.target.value)}
+                      className="w-full text-xs font-medium text-slate-100 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    >
+                      <option value="">Rear Camera (Auto Default)</option>
+                      {availableCameras.map((cam, idx) => (
+                        <option key={cam.deviceId} value={cam.deviceId}>
+                          {cam.label || `Camera ${idx + 1}`}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 {cameraError && (
                   <p className="text-xs text-red-400 max-w-md">{cameraError}</p>
                 )}
                 <button
                   type="button"
+                  disabled={isSwitchingCamera}
                   onClick={() => startCamera('single')}
-                  className="mt-1 px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors whitespace-nowrap"
+                  className="mt-1 px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg transition-colors whitespace-nowrap"
                 >
-                  Enable Camera
+                  {isSwitchingCamera ? 'Starting Camera…' : 'Enable Camera'}
                 </button>
               </div>
             )}
@@ -700,7 +1045,7 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
                 </p>
               </div>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
               <button
                 type="button"
                 disabled={generatingSpecimen !== null || isScanning}
@@ -711,7 +1056,7 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
                   {generatingSpecimen === 'passport_td3' ? 'Rendering…' : 'Passport (TD3)'}
                 </span>
                 <span className="text-[11px] text-slate-500 mt-0.5">
-                  2×44 MRZ + Visual Zone
+                  2×44 MRZ + Portrait + Visual Zone
                 </span>
               </button>
               <button
@@ -724,7 +1069,7 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
                   {generatingSpecimen === 'id_card_td1' ? 'Rendering…' : 'National ID (TD1)'}
                 </span>
                 <span className="text-[11px] text-slate-500 mt-0.5">
-                  3×30 MRZ + Personal ID
+                  3×30 MRZ + Portrait + Personal ID
                 </span>
               </button>
               <button
@@ -739,7 +1084,22 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
                     : "Driver's License"}
                 </span>
                 <span className="text-[11px] text-slate-500 mt-0.5">
-                  Visual Zone (No MRZ)
+                  Visual Zone + Portrait (No MRZ)
+                </span>
+              </button>
+              <button
+                type="button"
+                disabled={generatingSpecimen !== null || isScanning}
+                onClick={() => handleLoadSpecimen('specimen_watermark')}
+                className="flex flex-col items-start text-left p-3 bg-white border border-slate-200 hover:border-red-400 rounded-lg transition-colors disabled:opacity-50"
+              >
+                <span className="text-xs font-semibold text-slate-900">
+                  {generatingSpecimen === 'specimen_watermark'
+                    ? 'Rendering…'
+                    : 'Watermarked Specimen (MUSTER)'}
+                </span>
+                <span className="text-[11px] text-slate-500 mt-0.5">
+                  Portrait + Signature + Red Stamp
                 </span>
               </button>
             </div>
@@ -761,7 +1121,7 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
               {renderPairSideSlot(
                 'back',
                 'Back Side',
-                'MRZ lines, address, issuing authority',
+                'MRZ lines, PDF417 barcode, address',
                 backFile,
                 backPreviewUrl,
                 backInputRef
@@ -781,9 +1141,18 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
                     </div>
                   </div>
                 </div>
-                <span className="text-xs font-mono tabular-nums text-blue-700 font-semibold shrink-0">
-                  {progress?.progress ?? 0}%
-                </span>
+                <div className="flex items-center gap-3 shrink-0">
+                  <span className="text-xs font-mono tabular-nums text-blue-700 font-semibold">
+                    {progress?.progress ?? 0}%
+                  </span>
+                  <button
+                    type="button"
+                    onClick={onCancelScan}
+                    className="px-2.5 py-1 text-xs font-medium text-red-700 bg-white border border-red-200 hover:bg-red-50 rounded-md transition-colors whitespace-nowrap"
+                  >
+                    Cancel Scan
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -982,8 +1351,17 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
                         style={{ width: `${progress?.progress ?? 10}%` }}
                       />
                     </div>
-                    <div className="mt-1.5 text-right text-[11px] font-mono tabular-nums text-slate-500">
-                      {progress?.progress ?? 0}%
+                    <div className="mt-2.5 flex items-center justify-between gap-2">
+                      <button
+                        type="button"
+                        onClick={onCancelScan}
+                        className="px-2.5 py-1 text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded-md transition-colors whitespace-nowrap"
+                      >
+                        Cancel Scan
+                      </button>
+                      <span className="text-[11px] font-mono tabular-nums text-slate-500">
+                        {progress?.progress ?? 0}%
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -1020,7 +1398,7 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
               Drop a passport, ID card, or driver&apos;s license image here
             </p>
             <p className="text-xs text-slate-500 mt-1">
-              Supports PNG, JPG, WebP, AVIF · Auto-rectifies perspective &amp; straightens rotated scans
+              Supports PNG, JPG, WebP, AVIF · Portrait/Signature Crop, Specimen Check, MRZ &amp; PDF417
             </p>
             <button
               type="button"
@@ -1106,6 +1484,34 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
               </span>
             </label>
 
+            <label className="inline-flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={enableBarcodePass}
+                onChange={(e) => onToggleBarcodePass(e.target.checked)}
+                disabled={isScanning}
+                className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+              />
+              <span className="flex items-center gap-1">
+                <QrCode className="w-3.5 h-3.5 text-slate-400" />
+                PDF417 Barcode
+              </span>
+            </label>
+
+            <label className="inline-flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={extractMedia}
+                onChange={(e) => onToggleExtractMedia(e.target.checked)}
+                disabled={isScanning}
+                className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+              />
+              <span className="flex items-center gap-1">
+                <UserSquare2 className="w-3.5 h-3.5 text-slate-400" />
+                Portrait &amp; Signature
+              </span>
+            </label>
+
             <div className="inline-flex items-center gap-1.5">
               <label htmlFor="mrz-model-select" className="text-slate-500">
                 MRZ Model:
@@ -1161,32 +1567,40 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
             </div>
           </div>
 
-          <button
-            type="button"
-            disabled={!canRunScan || isScanning}
-            onClick={() => {
-              setEditingCorners(false);
-              onTriggerScan();
-            }}
-            className="px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed rounded-lg transition-colors whitespace-nowrap shrink-0 flex items-center gap-2"
-          >
+          <div className="flex items-center gap-2 shrink-0">
             {isScanning ? (
-              <>
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                Scanning…
-              </>
-            ) : scanMode === 'pair' ? (
-              <>
-                <Layers className="w-3.5 h-3.5" />
-                {mergedResult ? 'Re-Scan & Merge Pair' : 'Scan & Merge Both Sides'}
-              </>
+              <button
+                type="button"
+                onClick={onCancelScan}
+                className="px-4 py-2 text-xs font-semibold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg transition-colors whitespace-nowrap shrink-0 flex items-center gap-2"
+              >
+                <X className="w-3.5 h-3.5" />
+                Cancel Scan
+              </button>
             ) : (
-              <>
-                <ScanLine className="w-3.5 h-3.5" />
-                {result ? 'Re-Scan Document' : 'Run Client-Side OCR'}
-              </>
+              <button
+                type="button"
+                disabled={!canRunScan}
+                onClick={() => {
+                  setEditingCorners(false);
+                  onTriggerScan();
+                }}
+                className="px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed rounded-lg transition-colors whitespace-nowrap shrink-0 flex items-center gap-2"
+              >
+                {scanMode === 'pair' ? (
+                  <>
+                    <Layers className="w-3.5 h-3.5" />
+                    {mergedResult ? 'Re-Scan & Merge Pair' : 'Scan & Merge Both Sides'}
+                  </>
+                ) : (
+                  <>
+                    <ScanLine className="w-3.5 h-3.5" />
+                    {result ? 'Re-Scan Document' : 'Run Client-Side OCR'}
+                  </>
+                )}
+              </button>
             )}
-          </button>
+          </div>
         </div>
       </div>
     </section>

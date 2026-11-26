@@ -8,17 +8,22 @@ import {
   FileCode2,
   FileText,
   Layers,
+  PenTool,
+  QrCode,
   ShieldAlert,
   ShieldCheck,
   UserCheck,
+  UserSquare2,
+  XCircle,
 } from 'lucide-react';
-import type { ExtractedIdentity, FieldSource, MergedDocumentResult } from '../scanner';
+import type { CroppedRegionInfo, ExtractedIdentity, FieldSource, MergedDocumentResult } from '../scanner';
 
-type ResultTab = 'fields' | 'mrz' | 'raw' | 'json';
+type ResultTab = 'fields' | 'mrz' | 'barcode' | 'raw' | 'json';
 
 interface ExtractedResultsPanelProps {
   result: ExtractedIdentity | MergedDocumentResult | null;
   isScanning: boolean;
+  scanCancelled?: boolean;
   error: string | null;
   onExportJson: () => void;
 }
@@ -42,27 +47,93 @@ const DOC_TYPE_LABELS: Record<ExtractedIdentity['documentType'], string> = {
   unknown: 'Unclassified Document',
 };
 
+const AAMVA_ELEMENT_LABELS: Record<string, string> = {
+  DCS: 'Family Name / Surname',
+  DAC: 'First Name',
+  DAD: 'Middle Name(s)',
+  DCT: 'Given Names (Legacy)',
+  DAA: 'Full Name (Legacy)',
+  DCU: 'Name Suffix',
+  DAQ: 'Customer / License ID',
+  DCF: 'Document Discriminator',
+  DCK: 'Inventory Control Number',
+  DBB: 'Date of Birth',
+  DBA: 'Expiration Date',
+  DBD: 'Issue Date',
+  DBC: 'Sex',
+  DAG: 'Street Address 1',
+  DAH: 'Street Address 2',
+  DAI: 'City',
+  DAJ: 'Jurisdiction / State',
+  DAK: 'Postal Code',
+  DCG: 'Country Identification',
+  DCA: 'Vehicle Class',
+  DCB: 'Restrictions',
+  DCD: 'Endorsements',
+  DAU: 'Height',
+  DAW: 'Weight (lbs)',
+  DAX: 'Weight (kg)',
+  DAY: 'Eye Color',
+  DAZ: 'Hair Color',
+  DDA: 'REAL ID Compliance',
+  DDK: 'Organ Donor Indicator',
+  DDL: 'Veteran Indicator',
+};
+
+function summarizeDataUrl(dataUrl: string | null | undefined): string | null | undefined {
+  if (!dataUrl) return dataUrl;
+  return `<data:image/png;base64,… (${Math.round(dataUrl.length / 1024)} KB)>`;
+}
+
+function summarizeRegion(region: CroppedRegionInfo | null | undefined) {
+  if (!region) return region;
+  return {
+    ...region,
+    dataUrl: summarizeDataUrl(region.dataUrl),
+  };
+}
+
+function sanitizeSingleSideForDisplay(side: ExtractedIdentity) {
+  return {
+    ...side,
+    portraitDataUrl: summarizeDataUrl(side.portraitDataUrl),
+    portraitRegion: summarizeRegion(side.portraitRegion),
+    signatureDataUrl: summarizeDataUrl(side.signatureDataUrl),
+    signatureRegion: summarizeRegion(side.signatureRegion),
+    previews: undefined,
+  };
+}
+
 function sanitizeJsonForDisplay(res: ExtractedIdentity | MergedDocumentResult): string {
   if ('sides' in res) {
     return JSON.stringify(
       {
-        ...res,
-        previews: undefined,
+        ...sanitizeSingleSideForDisplay(res),
         sides: {
-          front: { ...res.sides.front, previews: undefined },
-          back: { ...res.sides.back, previews: undefined },
+          front: sanitizeSingleSideForDisplay(res.sides.front),
+          back: sanitizeSingleSideForDisplay(res.sides.back),
         },
       },
       null,
       2
     );
   }
-  return JSON.stringify({ ...res, previews: undefined }, null, 2);
+  return JSON.stringify(sanitizeSingleSideForDisplay(res), null, 2);
+}
+
+function downloadDataUrl(dataUrl: string, filename: string) {
+  const a = document.createElement('a');
+  a.href = dataUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
 }
 
 export const ExtractedResultsPanel: React.FC<ExtractedResultsPanelProps> = ({
   result,
   isScanning,
+  scanCancelled = false,
   error,
   onExportJson,
 }) => {
@@ -189,14 +260,30 @@ export const ExtractedResultsPanel: React.FC<ExtractedResultsPanelProps> = ({
               <span aria-hidden="true">·</span>
               <span className="font-mono tabular-nums">{result.documentFormat}</span>
               <span aria-hidden="true">·</span>
-              <span className="font-mono tabular-nums">{result.confidence}% OCR confidence</span>
+              <span className="font-mono tabular-nums">{result.confidence}% confidence</span>
               <span aria-hidden="true">·</span>
               <span className="font-mono tabular-nums">{result.processingTimeMs} ms</span>
+              {result.specimen?.isSpecimen && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span className="font-mono font-semibold text-red-700">
+                    Specimen Detected
+                  </span>
+                </>
+              )}
               {result.mrzModel && (
                 <>
                   <span aria-hidden="true">·</span>
                   <span className="font-mono text-slate-700">
                     MRZ: {result.mrzModel === 'ocrb' ? 'OCR-B' : 'Standard'}
+                  </span>
+                </>
+              )}
+              {result.barcode && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span className="font-mono text-indigo-700 font-medium">
+                    {result.barcode.aamva ? 'PDF417 · AAMVA' : 'PDF417'}
                   </span>
                 </>
               )}
@@ -206,6 +293,12 @@ export const ExtractedResultsPanel: React.FC<ExtractedResultsPanelProps> = ({
                   <span className="font-mono text-slate-700">
                     VIZ: {result.vizLanguage}
                   </span>
+                </>
+              )}
+              {result.workerPreprocessed && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span className="font-mono text-slate-700">Offscreen Worker</span>
                 </>
               )}
               {result.quality && (
@@ -238,12 +331,12 @@ export const ExtractedResultsPanel: React.FC<ExtractedResultsPanelProps> = ({
             </div>
           ) : (
             <p className="text-xs text-slate-500 mt-0.5">
-              MRZ check digits, identity fields, and raw OCR text output
+              Portrait &amp; signature crops, specimen alerts, MRZ check digits &amp; PDF417 barcodes
             </p>
           )}
         </div>
 
-        <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg">
+        <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-100 rounded-lg">
           <button
             type="button"
             onClick={() => setActiveTab('fields')}
@@ -267,6 +360,18 @@ export const ExtractedResultsPanel: React.FC<ExtractedResultsPanelProps> = ({
           >
             <ShieldCheck className="w-3.5 h-3.5" />
             MRZ
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('barcode')}
+            className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5 ${
+              activeTab === 'barcode'
+                ? 'bg-white text-slate-900 shadow-sm'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <QrCode className="w-3.5 h-3.5" />
+            Barcode
           </button>
           <button
             type="button"
@@ -297,6 +402,18 @@ export const ExtractedResultsPanel: React.FC<ExtractedResultsPanelProps> = ({
 
       {/* Panel Body */}
       <div className="p-5 flex-1 flex flex-col">
+        {scanCancelled && !isScanning && (
+          <div className="mb-4 p-3.5 border border-amber-200 bg-amber-50 rounded-lg flex items-start gap-2.5 text-xs text-amber-900">
+            <XCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-semibold">Scan Cancelled</p>
+              <p className="mt-0.5 text-amber-800">
+                Active preprocessing and OCR workers were terminated via AbortSignal. Click Run Client-Side OCR anytime to scan again.
+              </p>
+            </div>
+          </div>
+        )}
+
         {error && (
           <div className="mb-4 p-3.5 border border-red-200 bg-red-50 rounded-lg flex items-start gap-2.5 text-xs text-red-800">
             <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
@@ -312,7 +429,7 @@ export const ExtractedResultsPanel: React.FC<ExtractedResultsPanelProps> = ({
             <UserCheck className="w-9 h-9 text-slate-300 mb-3" />
             <h3 className="text-sm font-semibold text-slate-900">No Document Scanned Yet</h3>
             <p className="text-xs text-slate-500 max-w-sm mt-1 leading-relaxed">
-              Upload a passport, national ID card, or driver&apos;s license on the left — or switch to Front + Back ID to merge two-sided documents directly in the browser.
+              Upload or capture a passport, national ID card, or driver&apos;s license on the left — or switch to Front + Back ID to merge two-sided documents directly in the browser.
             </p>
           </div>
         )}
@@ -333,6 +450,43 @@ export const ExtractedResultsPanel: React.FC<ExtractedResultsPanelProps> = ({
 
         {result && activeTab === 'fields' && (
           <div className="flex flex-col">
+            {result.specimen?.isSpecimen && (
+              <div className="mb-4 p-3.5 rounded-lg border border-red-200 bg-red-50/90 text-xs text-red-950 flex items-start gap-2.5">
+                <ShieldAlert className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                <div className="min-w-0 flex-1">
+                  <div className="font-semibold flex flex-wrap items-center gap-2">
+                    <span>Specimen / Sample Watermark Detected</span>
+                    <span className="font-mono text-[11px] font-medium text-red-700">
+                      ({result.specimen.confidence}% confidence)
+                    </span>
+                  </div>
+                  <p className="mt-0.5 text-red-800">
+                    Matched indicators: {result.specimen.matchedIndicators.join(', ')}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {result.crossValidation?.performed && !result.crossValidation.consistent && (
+              <div className="mb-4 p-3.5 rounded-lg border border-amber-200 bg-amber-50 text-xs text-amber-950 flex items-start gap-2.5">
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <div className="min-w-0 flex-1">
+                  <div className="font-semibold">
+                    Single-Side MRZ ↔ VIZ Cross-Validation Mismatch ({result.crossValidation.discrepancies.length})
+                  </div>
+                  <ul className="mt-1 space-y-1 text-[11px] text-amber-900">
+                    {result.crossValidation.discrepancies.map((d, i) => (
+                      <li key={`${d.field}-${i}`}>
+                        <span className="font-mono font-semibold">{d.field}</span>: MRZ (
+                        <span className="font-mono">{d.mrzValue}</span>) vs VIZ (
+                        <span className="font-mono">{d.vizValue}</span>)
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            )}
+
             {mergedResult && (
               <div
                 className={`mb-4 p-3 rounded-lg border text-xs flex items-start gap-2.5 ${
@@ -403,6 +557,26 @@ export const ExtractedResultsPanel: React.FC<ExtractedResultsPanelProps> = ({
                       </span>
                     </>
                   )}
+                  {result.crossValidation?.performed && result.crossValidation.consistent && result.crossValidation.matchedFields.length > 0 && (
+                    <>
+                      <span aria-hidden="true">·</span>
+                      <span className="inline-flex items-center gap-1 font-medium text-emerald-700">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        MRZ ↔ VIZ Verified ({result.crossValidation.matchedFields.length})
+                      </span>
+                    </>
+                  )}
+                  {result.barcode && (
+                    <>
+                      <span aria-hidden="true">·</span>
+                      <span className="inline-flex items-center gap-1 font-medium text-indigo-700">
+                        <QrCode className="w-3.5 h-3.5" />
+                        {result.barcode.aamva
+                          ? `AAMVA PDF417 (${result.barcode.aamva.jurisdictionName ?? 'DL/ID'})`
+                          : 'PDF417 Decoded'}
+                      </span>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -416,6 +590,92 @@ export const ExtractedResultsPanel: React.FC<ExtractedResultsPanelProps> = ({
                 Show undetected fields
               </label>
             </div>
+
+            {(result.portraitDataUrl || result.signatureDataUrl) && (
+              <div className="mb-6">
+                <h3 className="text-xs font-semibold text-slate-500 pb-2 border-b border-slate-200 mb-3">
+                  Extracted Document Media
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {result.portraitDataUrl && (
+                    <div className="border border-slate-200 rounded-lg bg-slate-50/70 p-3 flex items-center gap-3">
+                      <div className="w-16 h-20 rounded border border-slate-200 bg-white overflow-hidden shrink-0 flex items-center justify-center">
+                        <img
+                          src={result.portraitDataUrl}
+                          alt="Cropped holder portrait"
+                          referrerPolicy="no-referrer"
+                          className="max-w-full max-h-full object-contain"
+                        />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xs font-semibold text-slate-900 flex items-center gap-1.5">
+                          <UserSquare2 className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                          <span>Holder Portrait</span>
+                        </div>
+                        {result.portraitRegion && (
+                          <div className="text-[11px] font-mono text-slate-500 mt-0.5 tabular-nums">
+                            {result.portraitRegion.width}×{result.portraitRegion.height}px
+                          </div>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            downloadDataUrl(
+                              result.portraitDataUrl!,
+                              `portrait-${result.documentNumber || 'scan'}.png`
+                            )
+                          }
+                          className="mt-2 inline-flex items-center gap-1 text-[11px] font-medium text-blue-600 hover:text-blue-700"
+                        >
+                          <Download className="w-3 h-3" />
+                          Save PNG
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {result.signatureDataUrl && (
+                    <div className="border border-slate-200 rounded-lg bg-slate-50/70 p-3 flex items-center gap-3">
+                      <div className="w-28 h-20 rounded border border-slate-200 bg-white overflow-hidden shrink-0 flex items-center justify-center p-1.5">
+                        <img
+                          src={result.signatureDataUrl}
+                          alt="Cropped holder signature"
+                          referrerPolicy="no-referrer"
+                          className="max-w-full max-h-full object-contain"
+                        />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xs font-semibold text-slate-900 flex items-center gap-1.5">
+                          <PenTool className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                          <span>Holder Signature</span>
+                        </div>
+                        {result.signatureRegion && (
+                          <div className="text-[11px] font-mono text-slate-500 mt-0.5 tabular-nums">
+                            {result.signatureRegion.width}×{result.signatureRegion.height}px ·{' '}
+                            {result.signatureRegion.detectionMethod === 'viz_label'
+                              ? 'VIZ label anchor'
+                              : 'Ink heuristic'}
+                          </div>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            downloadDataUrl(
+                              result.signatureDataUrl!,
+                              `signature-${result.documentNumber || 'scan'}.png`
+                            )
+                          }
+                          className="mt-2 inline-flex items-center gap-1 text-[11px] font-medium text-blue-600 hover:text-blue-700"
+                        >
+                          <Download className="w-3 h-3" />
+                          Save PNG
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {renderFieldGroup('Identity & Personal Details', [
               {
@@ -701,7 +961,101 @@ export const ExtractedResultsPanel: React.FC<ExtractedResultsPanelProps> = ({
                   No Machine Readable Zone Detected
                 </p>
                 <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1">
-                  This document appears to be visual-only (such as a driver&apos;s license or front side of a card), or the MRZ lines at the bottom were cropped/obscured.
+                  This document appears to be visual-only or barcode-backed (such as a driver&apos;s license or front side of a card), or the MRZ lines at the bottom were cropped/obscured.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {result && activeTab === 'barcode' && (
+          <div className="flex flex-col gap-5">
+            {result.barcode ? (
+              <>
+                <div className="p-3.5 rounded-lg border border-indigo-200 bg-indigo-50/60 flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <div className="flex items-center gap-2 text-indigo-950 font-semibold">
+                    <QrCode className="w-4 h-4 text-indigo-700 shrink-0" />
+                    <span>
+                      {result.barcode.aamva
+                        ? `PDF417 · AAMVA v${result.barcode.aamva.version ?? '—'} (${result.barcode.aamva.jurisdictionName ?? result.barcode.aamva.issuingCountry ?? 'DL/ID'})`
+                        : 'PDF417 2D Barcode Decoded'}
+                    </span>
+                  </div>
+                  <span className="font-mono text-[11px] text-indigo-800">
+                    Decoder: {result.barcode.detector === 'native' ? 'Native BarcodeDetector' : 'Pure-JS ZXing'}
+                  </span>
+                </div>
+
+                {result.barcode.aamva && (
+                  <div>
+                    <h3 className="text-xs font-semibold text-slate-600 mb-2">
+                      Decoded AAMVA Elements ({Object.keys(result.barcode.aamva.fields).length})
+                    </h3>
+                    <div className="border border-slate-200 rounded-lg overflow-hidden">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="bg-slate-50 border-b border-slate-200 text-slate-600">
+                            <th className="py-2 px-3 font-semibold w-20">Tag</th>
+                            <th className="py-2 px-3 font-semibold">Element</th>
+                            <th className="py-2 px-3 font-semibold text-right">Value</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {Object.entries(result.barcode.aamva.fields).map(([tag, val]) => (
+                            <tr key={tag} className="hover:bg-slate-50/70">
+                              <td className="py-2 px-3 font-mono font-semibold text-indigo-700">
+                                {tag}
+                              </td>
+                              <td className="py-2 px-3 text-slate-600">
+                                {AAMVA_ELEMENT_LABELS[tag] ?? 'AAMVA Field'}
+                              </td>
+                              <td className="py-2 px-3 text-right font-mono text-slate-900 break-words">
+                                {val}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <h3 className="text-xs font-semibold text-slate-600">
+                      Raw PDF417 Payload
+                    </h3>
+                    <button
+                      type="button"
+                      onClick={() => copyValue('barcode-raw', result.barcode!.rawText)}
+                      className="text-xs font-medium text-blue-600 hover:text-blue-700 flex items-center gap-1"
+                    >
+                      {copiedKey === 'barcode-raw' ? (
+                        <>
+                          <Check className="w-3.5 h-3.5" />
+                          Copied
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5" />
+                          Copy Payload
+                        </>
+                      )}
+                    </button>
+                  </div>
+                  <pre className="p-3.5 bg-slate-950 text-slate-100 rounded-lg font-mono text-xs leading-relaxed overflow-x-auto max-h-[260px]">
+                    {result.barcode.rawText}
+                  </pre>
+                </div>
+              </>
+            ) : (
+              <div className="py-12 px-6 text-center border border-dashed border-slate-200 rounded-lg bg-slate-50">
+                <QrCode className="w-8 h-8 text-slate-400 mx-auto mb-2.5" />
+                <p className="text-sm font-semibold text-slate-900">
+                  No PDF417 Barcode Detected
+                </p>
+                <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1">
+                  Scan the back side of a US, Canadian, or AAMVA-compliant driver&apos;s license or ID card to deterministically extract all encoded fields.
                 </p>
               </div>
             )}

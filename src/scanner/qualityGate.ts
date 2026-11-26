@@ -1,10 +1,12 @@
-import { loadImageElement } from './imagePreprocessor';
+import { getSurfaceDimensions, loadImageElement } from './imagePreprocessor';
 import { detectDocumentQuad } from './perspective';
 import type {
   CameraAutoCaptureOptions,
   DocumentQuad,
   ImageInput,
   ImageQualityReport,
+  ImageSurface,
+  NormalizedRect,
   QualityGateOptions,
   QualityIssueCode,
 } from './types';
@@ -24,6 +26,54 @@ const SIG_H = 24;
 
 function isVideoElement(input: ImageInput | HTMLVideoElement): input is HTMLVideoElement {
   return typeof HTMLVideoElement !== 'undefined' && input instanceof HTMLVideoElement;
+}
+
+function clampRect(rect: NormalizedRect): NormalizedRect {
+  const x = Math.max(0, Math.min(0.95, rect.x));
+  const y = Math.max(0, Math.min(0.95, rect.y));
+  const width = Math.max(0.05, Math.min(1 - x, rect.width));
+  const height = Math.max(0.05, Math.min(1 - y, rect.height));
+  return { x, y, width, height };
+}
+
+/**
+ * Computes the normalized [0..1] source rectangle actually visible inside a `<video>` element
+ * rendered with `object-cover` CSS (e.g. a tall 9:16 portrait stream inside a 4:3/16:10 viewfinder).
+ * Includes a small safety margin (`padRatio`) so card edges near the viewfinder border never clip.
+ * Returns `null` when the stream aspect ratio already matches the displayed box cleanly.
+ */
+export function computeVisibleVideoCrop(
+  video: HTMLVideoElement,
+  padRatio = 0.03
+): NormalizedRect | null {
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  const cw = video.clientWidth;
+  const ch = video.clientHeight;
+  if (!vw || !vh || !cw || !ch) return null;
+
+  const videoAspect = vw / vh;
+  const boxAspect = cw / ch;
+  if (Math.abs(videoAspect - boxAspect) / Math.max(videoAspect, boxAspect) < 0.04) {
+    return null;
+  }
+
+  let visW = 1;
+  let visH = 1;
+  if (videoAspect < boxAspect) {
+    // Portrait stream inside wider box -> object-cover crops top & bottom background
+    visH = Math.min(1, (videoAspect / boxAspect) * (1 + padRatio * 2));
+  } else {
+    // Ultra-wide stream inside narrower box -> object-cover crops left & right margins
+    visW = Math.min(1, (boxAspect / videoAspect) * (1 + padRatio * 2));
+  }
+
+  return clampRect({
+    x: (1 - visW) * 0.5,
+    y: (1 - visH) * 0.5,
+    width: visW,
+    height: visH,
+  });
 }
 
 function computeFrameSignature(
@@ -69,7 +119,7 @@ function buildGuidance(issues: QualityIssueCode[], documentDetected: boolean): s
     return 'Hold steady — stabilizing frame…';
   }
   if (issues.includes('too_blurry')) {
-    return 'Image looks blurry — hold steady or adjust distance to focus';
+    return 'Image looks blurry — hold steady or move slightly back to focus';
   }
   return 'Adjust framing and lighting';
 }
@@ -86,19 +136,19 @@ export function assessCanvasQuality(
   optionsInternal?: { detectQuad?: boolean }
 ): { report: ImageQualityReport; signature: Uint8Array } {
   const {
-    minSharpness = 34,
+    minSharpness = 26,
     maxGlareRatio = 0.045,
-    minBrightness = 48,
-    maxBrightness = 242,
+    minBrightness = 45,
+    maxBrightness = 244,
     requireDocument = true,
-    maxMotionDelta = 5.5,
+    maxMotionDelta = 7.5,
   } = options;
 
   const srcW = Math.max(1, canvas.width);
   const srcH = Math.max(1, canvas.height);
 
-  // Downscale cleanly to ~360px max dim so Laplacian/glare/motion run in ~3-6ms per frame
-  const maxDim = 360;
+  // Downscale to ~480px max dim so phone camera text edges stay crisp during sharpness scoring
+  const maxDim = 480;
   const scale = Math.min(1, maxDim / Math.max(srcW, srcH));
   const w = Math.max(32, Math.round(srcW * scale));
   const h = Math.max(32, Math.round(srcH * scale));
@@ -177,7 +227,6 @@ export function assessCanvasQuality(
         clippedWhiteCount++;
       }
 
-      // Discrete 3x3 Laplacian & gradient energy
       const lap =
         Math.abs(4 * lum - gray[idx - 1] - gray[idx + 1] - gray[idx - w] - gray[idx + w]);
       const gx = Math.abs(gray[idx + 1] - gray[idx - 1]);
@@ -196,7 +245,6 @@ export function assessCanvasQuality(
 
   const meanBrightness = Math.round(lumSum / Math.max(1, roiPixels));
 
-  // Compute percentiles from histogram for exposure & glare background checks
   let p10 = 0;
   let p60 = 128;
   let p95 = 255;
@@ -220,7 +268,7 @@ export function assessCanvasQuality(
   }
   const dynamicRange = p95 - p10;
 
-  // Score sharpness from the top quartile of high-detail tiles (text/MRZ tiles)
+  // Score sharpness from the top quartile of high-detail tiles (text/MRZ/barcode tiles)
   const tileScores: number[] = [];
   for (let t = 0; t < tileCount; t++) {
     const cnt = tileCounts[t];
@@ -240,12 +288,10 @@ export function assessCanvasQuality(
   const topDetail = topDetailSum / topN;
   const sharpnessScore = Math.max(
     0,
-    Math.min(100, Math.round(((topDetail - 2) / 30) * 100))
+    Math.min(100, Math.round(((topDetail - 2) / 28) * 100))
   );
   const isSharp = sharpnessScore >= minSharpness;
 
-  // Glare hotspot check: distinguish bright glare reflections over a document
-  // from pure-white digital/paper full-page backgrounds (where p60 >= 236).
   const rawClippedRatio = clippedWhiteCount / Math.max(1, roiPixels);
   const glareRatio =
     p60 < 236
@@ -253,7 +299,6 @@ export function assessCanvasQuality(
       : Math.round(Math.max(0, rawClippedRatio - 0.55) * 1000) / 1000;
   const hasGlare = p60 < 236 && rawClippedRatio > maxGlareRatio && rawClippedRatio < 0.78;
 
-  // Exposure check (allow clean white-paper documents when crisp dark ink keeps dynamicRange healthy)
   let exposureStatus: ImageQualityReport['exposureStatus'] = 'ok';
   if (meanBrightness < minBrightness) {
     exposureStatus = 'too_dark';
@@ -261,20 +306,18 @@ export function assessCanvasQuality(
     exposureStatus = 'too_bright';
   }
 
-  // Quad & structured document detection
   let detectedCorners: DocumentQuad | null = null;
   if (optionsInternal?.detectQuad !== false) {
     const quadResult = detectDocumentQuad(workCanvas);
-    if (quadResult && quadResult.sourceQuadAreaRatio >= 0.2) {
+    if (quadResult && quadResult.sourceQuadAreaRatio >= 0.1) {
       detectedCorners = quadResult.corners;
     }
   }
 
   const edgeDensity = highEdgeCount / Math.max(1, roiPixels);
   const documentDetected =
-    detectedCorners !== null || (edgeDensity >= 0.015 && dynamicRange >= 40);
+    detectedCorners !== null || (edgeDensity >= 0.011 && dynamicRange >= 32);
 
-  // Frame-to-frame motion steadiness
   let motionDelta = 0;
   let isStable = true;
   let stabilityScore = 100;
@@ -357,38 +400,44 @@ export function assessCanvasQuality(
 /**
  * Runs the client-side Image Quality Gate (sharpness/focus, specular glare,
  * exposure, and document framing detection) on any image File, Blob, Data URL,
- * HTMLImageElement, HTMLCanvasElement, or HTMLVideoElement.
+ * HTMLImageElement, HTMLCanvasElement, ImageBitmap, or HTMLVideoElement.
  */
 export async function assessImageQuality(
   input: ImageInput | HTMLVideoElement,
   options: QualityGateOptions = {}
 ): Promise<ImageQualityReport> {
-  if (input instanceof HTMLCanvasElement) {
+  if (typeof HTMLCanvasElement !== 'undefined' && input instanceof HTMLCanvasElement) {
     return assessCanvasQuality(input, null, options).report;
   }
 
   let canvas: HTMLCanvasElement;
   if (isVideoElement(input)) {
+    const crop = computeVisibleVideoCrop(input);
     const vw = Math.max(1, input.videoWidth || input.clientWidth);
     const vh = Math.max(1, input.videoHeight || input.clientHeight);
-    const scale = Math.min(1, 480 / Math.max(vw, vh));
+    const sx = crop ? Math.round(crop.x * vw) : 0;
+    const sy = crop ? Math.round(crop.y * vh) : 0;
+    const sw = crop ? Math.max(1, Math.round(crop.width * vw)) : vw;
+    const sh = crop ? Math.max(1, Math.round(crop.height * vh)) : vh;
+
+    const scale = Math.min(1, 480 / Math.max(sw, sh));
     canvas = document.createElement('canvas');
-    canvas.width = Math.max(1, Math.round(vw * scale));
-    canvas.height = Math.max(1, Math.round(vh * scale));
+    canvas.width = Math.max(1, Math.round(sw * scale));
+    canvas.height = Math.max(1, Math.round(sh * scale));
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) throw new Error('2D canvas context unavailable');
-    ctx.drawImage(input, 0, 0, canvas.width, canvas.height);
+    ctx.drawImage(input, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
   } else {
-    const img = await loadImageElement(input);
-    const nw = Math.max(1, img.naturalWidth || img.width);
-    const nh = Math.max(1, img.naturalHeight || img.height);
+    const isBitmap = typeof ImageBitmap !== 'undefined' && input instanceof ImageBitmap;
+    const surface: ImageSurface = isBitmap ? input : await loadImageElement(input);
+    const { width: nw, height: nh } = getSurfaceDimensions(surface);
     const scale = Math.min(1, 480 / Math.max(nw, nh));
     canvas = document.createElement('canvas');
     canvas.width = Math.max(1, Math.round(nw * scale));
     canvas.height = Math.max(1, Math.round(nh * scale));
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) throw new Error('2D canvas context unavailable');
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    ctx.drawImage(surface, 0, 0, canvas.width, canvas.height);
   }
 
   return assessCanvasQuality(canvas, null, options).report;
@@ -425,8 +474,10 @@ export class CameraAutoCapture {
   constructor(video: HTMLVideoElement, options: CameraAutoCaptureOptions = {}) {
     this.video = video;
     this.options = {
-      sampleIntervalMs: 180,
-      requiredStableFrames: 3,
+      sampleIntervalMs: 170,
+      requiredStableFrames: 2,
+      minSharpness: 22,
+      maxMotionDelta: 8.5,
       mimeType: 'image/png',
       captureQuality: 0.94,
       stopOnCapture: true,
@@ -470,6 +521,28 @@ export class CameraAutoCapture {
     };
   }
 
+  private resolveSourceCrop(vw: number, vh: number): {
+    sx: number;
+    sy: number;
+    sw: number;
+    sh: number;
+  } {
+    const rawRegion =
+      typeof this.options.captureRegion === 'function'
+        ? this.options.captureRegion()
+        : this.options.captureRegion ?? null;
+
+    if (!rawRegion) {
+      return { sx: 0, sy: 0, sw: vw, sh: vh };
+    }
+    const rect = clampRect(rawRegion);
+    const sx = Math.max(0, Math.round(rect.x * vw));
+    const sy = Math.max(0, Math.round(rect.y * vh));
+    const sw = Math.min(vw - sx, Math.max(16, Math.round(rect.width * vw)));
+    const sh = Math.min(vh - sy, Math.max(16, Math.round(rect.height * vh)));
+    return { sx, sy, sw, sh };
+  }
+
   private scheduleNextTick(delayMs: number): void {
     if (!this.running) return;
     this.timerId = window.setTimeout(() => {
@@ -492,9 +565,10 @@ export class CameraAutoCapture {
     }
 
     try {
-      const scale = Math.min(1, 360 / Math.max(vw, vh));
-      const aw = Math.max(32, Math.round(vw * scale));
-      const ah = Math.max(32, Math.round(vh * scale));
+      const { sx, sy, sw, sh } = this.resolveSourceCrop(vw, vh);
+      const scale = Math.min(1, 480 / Math.max(sw, sh));
+      const aw = Math.max(32, Math.round(sw * scale));
+      const ah = Math.max(32, Math.round(sh * scale));
       if (this.analysisCanvas.width !== aw || this.analysisCanvas.height !== ah) {
         this.analysisCanvas.width = aw;
         this.analysisCanvas.height = ah;
@@ -504,7 +578,7 @@ export class CameraAutoCapture {
         this.scheduleNextTick(this.options.sampleIntervalMs);
         return;
       }
-      aCtx.drawImage(this.video, 0, 0, aw, ah);
+      aCtx.drawImage(this.video, sx, sy, sw, sh, 0, 0, aw, ah);
 
       const { report, signature } = assessCanvasQuality(
         this.analysisCanvas,
@@ -516,6 +590,9 @@ export class CameraAutoCapture {
 
       if (report.passed) {
         this.consecutivePassFrames++;
+      } else if (report.issues.length === 1 && report.issues[0] === 'camera_moving') {
+        // Gentle leaky hysteresis prevents minor mobile autofocus/hand tremor from erasing progress
+        this.consecutivePassFrames = Math.max(0, this.consecutivePassFrames - 1);
       } else {
         this.consecutivePassFrames = 0;
       }
@@ -555,15 +632,16 @@ export class CameraAutoCapture {
         reject(new Error('Camera stream has no active video frame'));
         return;
       }
+      const { sx, sy, sw, sh } = this.resolveSourceCrop(vw, vh);
       const fullCanvas = document.createElement('canvas');
-      fullCanvas.width = vw;
-      fullCanvas.height = vh;
+      fullCanvas.width = sw;
+      fullCanvas.height = sh;
       const ctx = fullCanvas.getContext('2d');
       if (!ctx) {
         reject(new Error('2D canvas context unavailable'));
         return;
       }
-      ctx.drawImage(this.video, 0, 0, vw, vh);
+      ctx.drawImage(this.video, sx, sy, sw, sh, 0, 0, sw, sh);
       const mimeType = this.options.mimeType;
       const ext =
         mimeType === 'image/jpeg' ? 'jpg' : mimeType === 'image/webp' ? 'webp' : 'png';

@@ -1,8 +1,21 @@
-import type { GrayscaleBuffer, ImageInput, PreprocessedResult } from './types';
+import type { GrayscaleBuffer, ImageInput, ImageSurface, PreprocessedResult } from './types';
+
+export function getSurfaceDimensions(surface: ImageSurface): { width: number; height: number } {
+  if (typeof HTMLImageElement !== 'undefined' && surface instanceof HTMLImageElement) {
+    return {
+      width: Math.max(1, surface.naturalWidth || surface.width),
+      height: Math.max(1, surface.naturalHeight || surface.height),
+    };
+  }
+  return {
+    width: Math.max(1, surface.width),
+    height: Math.max(1, surface.height),
+  };
+}
 
 export function loadImageElement(input: ImageInput): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
-    if (input instanceof HTMLImageElement) {
+    if (typeof HTMLImageElement !== 'undefined' && input instanceof HTMLImageElement) {
       if (input.complete && input.naturalWidth > 0) {
         resolve(input);
       } else {
@@ -12,11 +25,28 @@ export function loadImageElement(input: ImageInput): Promise<HTMLImageElement> {
       return;
     }
 
-    if (input instanceof HTMLCanvasElement) {
+    if (typeof HTMLCanvasElement !== 'undefined' && input instanceof HTMLCanvasElement) {
       const img = new Image();
       img.onload = () => resolve(img);
       img.onerror = () => reject(new Error('Failed to convert canvas to image'));
       img.src = input.toDataURL('image/png');
+      return;
+    }
+
+    if (typeof ImageBitmap !== 'undefined' && input instanceof ImageBitmap) {
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, input.width);
+      canvas.height = Math.max(1, input.height);
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        reject(new Error('2D canvas context unavailable'));
+        return;
+      }
+      ctx.drawImage(input, 0, 0);
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('Failed to convert ImageBitmap to image'));
+      img.src = canvas.toDataURL('image/png');
       return;
     }
 
@@ -35,11 +65,48 @@ export function loadImageElement(input: ImageInput): Promise<HTMLImageElement> {
 
     if (typeof input === 'string') {
       img.src = input;
-    } else {
+    } else if (typeof Blob !== 'undefined' && input instanceof Blob) {
       objectUrl = URL.createObjectURL(input);
       img.src = objectUrl;
+    } else {
+      reject(new Error('Unsupported image input type'));
     }
   });
+}
+
+/**
+ * Decodes an ImageInput directly to a transferable ImageBitmap (off the main thread for Blob/File inputs)
+ * when supported, falling back cleanly to HTMLImageElement / HTMLCanvasElement.
+ */
+export async function loadImageSurface(
+  input: ImageInput,
+  preferBitmap = true
+): Promise<{ surface: ImageSurface; ownedBitmap: ImageBitmap | null }> {
+  if (typeof ImageBitmap !== 'undefined' && input instanceof ImageBitmap) {
+    return { surface: input, ownedBitmap: null };
+  }
+  if (typeof HTMLCanvasElement !== 'undefined' && input instanceof HTMLCanvasElement) {
+    return { surface: input, ownedBitmap: null };
+  }
+  if (typeof HTMLImageElement !== 'undefined' && input instanceof HTMLImageElement) {
+    const img = await loadImageElement(input);
+    return { surface: img, ownedBitmap: null };
+  }
+  if (
+    preferBitmap &&
+    typeof Blob !== 'undefined' &&
+    input instanceof Blob &&
+    typeof createImageBitmap === 'function'
+  ) {
+    try {
+      const bitmap = await createImageBitmap(input);
+      return { surface: bitmap, ownedBitmap: bitmap };
+    } catch {
+      // Fallback cleanly to HTMLImageElement decoding
+    }
+  }
+  const img = await loadImageElement(input);
+  return { surface: img, ownedBitmap: null };
 }
 
 /**
@@ -47,17 +114,10 @@ export function loadImageElement(input: ImageInput): Promise<HTMLImageElement> {
  * for fast client-side orientation and skew estimation.
  */
 export function sampleDownscaledGrayscale(
-  img: HTMLImageElement | HTMLCanvasElement,
+  img: ImageSurface,
   maxDim = 400
 ): GrayscaleBuffer {
-  const srcW = Math.max(
-    1,
-    img instanceof HTMLImageElement ? img.naturalWidth || img.width : img.width
-  );
-  const srcH = Math.max(
-    1,
-    img instanceof HTMLImageElement ? img.naturalHeight || img.height : img.height
-  );
+  const { width: srcW, height: srcH } = getSurfaceDimensions(img);
   const scale = Math.min(1, maxDim / Math.max(srcW, srcH));
   const width = Math.max(1, Math.round(srcW * scale));
   const height = Math.max(1, Math.round(srcH * scale));
@@ -358,13 +418,12 @@ export async function preprocessDocumentImage(
   } = {}
 ): Promise<PreprocessedResult> {
   const { preprocess = true, rotation = 0, deskewDegrees = 0 } = options;
-  const surface: HTMLImageElement | HTMLCanvasElement =
-    input instanceof HTMLCanvasElement ? input : await loadImageElement(input);
+  const isCanvas =
+    typeof HTMLCanvasElement !== 'undefined' && input instanceof HTMLCanvasElement;
+  const isBitmap = typeof ImageBitmap !== 'undefined' && input instanceof ImageBitmap;
+  const surface: ImageSurface = isCanvas || isBitmap ? input : await loadImageElement(input);
 
-  const srcW =
-    surface instanceof HTMLImageElement ? surface.naturalWidth || surface.width : surface.width;
-  const srcH =
-    surface instanceof HTMLImageElement ? surface.naturalHeight || surface.height : surface.height;
+  const { width: srcW, height: srcH } = getSurfaceDimensions(surface);
 
   const totalDeg = rotation + deskewDegrees;
   const hasFineSkew = Math.abs(deskewDegrees) >= 0.1;

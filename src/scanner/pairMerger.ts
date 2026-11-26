@@ -1,12 +1,15 @@
 import { resolveCountryName } from './countries';
+import { mergeSpecimenResults } from './specimenValidator';
 import type {
+  BarcodeParsedData,
   DocumentType,
   ExtractedIdentity,
   FieldSource,
   ImageQualityReport,
+  MergedDocumentResult,
   MrzParsedData,
   SideConsistencyConflict,
-  MergedDocumentResult,
+  SingleSideCrossValidation,
 } from './types';
 
 function computeAge(dobIso: string | null): number | null {
@@ -63,6 +66,16 @@ function mrzScore(mrz: MrzParsedData | null): number {
   );
 }
 
+function barcodeScore(barcode: BarcodeParsedData | null): number {
+  if (!barcode) return -1;
+  if (!barcode.aamva) return 10;
+  return 100 + Object.keys(barcode.aamva.fields).length;
+}
+
+function isBarcodeSource(src?: FieldSource): boolean {
+  return src === 'BARCODE' || src === 'BARCODE+VIZ';
+}
+
 function pickRichTextField(
   frontVal: string | null,
   backVal: string | null,
@@ -77,12 +90,15 @@ function pickRichTextField(
   const b = backVal?.trim() || null;
 
   if (f && b) {
-    // Preserve MRZ+VIZ tag if either side had MRZ, otherwise VIZ
-    const mergedSrc: FieldSource =
-      frontSource?.includes('MRZ') || backSource?.includes('MRZ') ? 'MRZ+VIZ' : 'VIZ';
+    const eitherMrz = frontSource?.includes('MRZ') || backSource?.includes('MRZ');
+    const eitherBarcode = isBarcodeSource(frontSource) || isBarcodeSource(backSource);
+    const mergedSrc: FieldSource = eitherMrz
+      ? 'MRZ+VIZ'
+      : eitherBarcode
+        ? 'BARCODE+VIZ'
+        : 'VIZ';
     sources[fieldKey] = mergedSrc;
 
-    // Prefer whichever string contains native diacritics if ASCII skeletons match
     const fAscii = stripDiacritics(f);
     const bAscii = stripDiacritics(b);
     if (fAscii === bAscii) {
@@ -90,9 +106,11 @@ function pickRichTextField(
       if (hasDiacritics(b) && !hasDiacritics(f)) return b;
     }
 
-    // Prefer MRZ-backed value when only one side had MRZ, unless VIZ has fuller non-truncated match
     if (frontSource === 'MRZ' && backSource !== 'MRZ') return f;
     if (backSource === 'MRZ' && frontSource !== 'MRZ') return b;
+
+    if (isBarcodeSource(frontSource) && !isBarcodeSource(backSource)) return f;
+    if (isBarcodeSource(backSource) && !isBarcodeSource(frontSource)) return b;
 
     if (f.length !== b.length && Math.abs(f.length - b.length) >= 3) {
       return f.length > b.length ? f : b;
@@ -113,12 +131,14 @@ function pickRichTextField(
 
 function pickNamePart(
   mrzName: string | null | undefined,
+  barcodeName: string | null | undefined,
   vizFrontName: string | null | undefined,
   vizBackName: string | null | undefined,
   fieldKey: string,
   sources: Record<string, FieldSource>
 ): string | null {
   const m = mrzName?.trim() || null;
+  const b = barcodeName?.trim() || null;
   const vf = vizFrontName?.trim() || null;
   const vb = vizBackName?.trim() || null;
   const bestViz = vf && vb ? (vf.length >= vb.length ? vf : vb) : vf || vb;
@@ -127,7 +147,6 @@ function pickNamePart(
     sources[fieldKey] = 'MRZ+VIZ';
     const mAscii = stripDiacritics(m);
     const vAscii = stripDiacritics(bestViz);
-    // Enrich with native accents (e.g. GARCÍA MARTÍNEZ / LUCÍA) or full untruncated name if VIZ starts with or matches MRZ
     if (vAscii === mAscii && hasDiacritics(bestViz)) {
       return bestViz;
     }
@@ -144,6 +163,10 @@ function pickNamePart(
   if (m) {
     sources[fieldKey] = 'MRZ';
     return m;
+  }
+  if (b) {
+    sources[fieldKey] = bestViz ? 'BARCODE+VIZ' : 'BARCODE';
+    return b;
   }
   if (bestViz) {
     sources[fieldKey] = 'VIZ';
@@ -188,11 +211,33 @@ function mergeQualityReports(
   };
 }
 
+function mergeCrossValidation(
+  fcv?: SingleSideCrossValidation,
+  bcv?: SingleSideCrossValidation
+): SingleSideCrossValidation | undefined {
+  if (!fcv?.performed && !bcv?.performed) {
+    return fcv ?? bcv;
+  }
+  if (fcv?.performed && !bcv?.performed) return fcv;
+  if (!fcv?.performed && bcv?.performed) return bcv;
+
+  const matchedFields = Array.from(
+    new Set([...(fcv?.matchedFields ?? []), ...(bcv?.matchedFields ?? [])])
+  );
+  const discrepancies = [...(fcv?.discrepancies ?? []), ...(bcv?.discrepancies ?? [])];
+  return {
+    performed: true,
+    matchedFields,
+    discrepancies,
+    consistent: discrepancies.length === 0,
+  };
+}
+
 /**
  * Pure two-sided identity merger. Combines extracted data from the front and back
  * of an ID card, residence permit, or driver license (even if uploaded swapped),
- * preserving valid ICAO 9303 MRZ check digits while enriching addresses, diacritics,
- * sex, issue dates, and cross-checking overlapping fields for consistency.
+ * preserving valid ICAO 9303 MRZ check digits, deterministic AAMVA PDF417 barcode
+ * fields, cropped portrait/signature assets, and specimen watermark flags.
  */
 export function mergeDocumentSides(
   front: ExtractedIdentity,
@@ -200,6 +245,11 @@ export function mergeDocumentSides(
 ): MergedDocumentResult {
   const frontHasMrz = front.mrz !== null;
   const backHasMrz = back.mrz !== null;
+  const winningBarcode =
+    barcodeScore(back.barcode) >= barcodeScore(front.barcode)
+      ? back.barcode
+      : front.barcode;
+  const aamva = winningBarcode?.aamva ?? null;
 
   let sideAssignment: MergedDocumentResult['sideAssignment'] = 'front+back';
   if (frontHasMrz && backHasMrz) {
@@ -207,10 +257,9 @@ export function mergeDocumentSides(
   } else if (frontHasMrz && !backHasMrz) {
     sideAssignment = 'swapped_detected';
   } else if (!frontHasMrz && !backHasMrz) {
-    sideAssignment = 'visual_only';
+    sideAssignment = winningBarcode ? 'barcode_back' : 'visual_only';
   }
 
-  // Pick winning MRZ (from whichever side has the stronger valid MRZ)
   const winningMrz =
     mrzScore(back.mrz) >= mrzScore(front.mrz) ? back.mrz : front.mrz;
   const mrzRawText =
@@ -218,14 +267,12 @@ export function mergeDocumentSides(
       ? back.rawMrzText || front.rawMrzText
       : front.rawMrzText || back.rawMrzText;
 
-  // Determine VIZ-only side vs MRZ side for accented name enrichment
-  const frontVizOnly = frontHasMrz ? null : front;
-  const backVizOnly = backHasMrz ? null : back;
+  const frontVizOnly = frontHasMrz || front.barcode?.aamva ? null : front;
+  const backVizOnly = backHasMrz || back.barcode?.aamva ? null : back;
 
   const fieldSources: Record<string, FieldSource> = {};
   const conflicts: SideConsistencyConflict[] = [];
 
-  // Cross-side consistency checks
   const fDoc = normalizeDocNumber(front.documentNumber);
   const bDoc = normalizeDocNumber(back.documentNumber);
   if (fDoc && bDoc && fDoc !== bDoc && !fDoc.includes(bDoc) && !bDoc.includes(fDoc)) {
@@ -237,7 +284,9 @@ export function mergeDocumentSides(
         ? `Used back MRZ value (${back.documentNumber})`
         : front.mrz?.allCheckDigitsValid
           ? `Used front MRZ value (${front.documentNumber})`
-          : `Used higher-confidence side`,
+          : aamva?.documentNumber
+            ? `Used AAMVA PDF417 barcode (${aamva.documentNumber})`
+            : `Used higher-confidence side`,
     });
   }
 
@@ -248,7 +297,9 @@ export function mergeDocumentSides(
       backValue: back.dateOfBirth,
       resolution: winningMrz?.dateOfBirth
         ? `Used MRZ date of birth (${winningMrz.dateOfBirth})`
-        : `Used higher-confidence side`,
+        : aamva?.dateOfBirth
+          ? `Used AAMVA barcode DOB (${aamva.dateOfBirth})`
+          : `Used higher-confidence side`,
     });
   }
 
@@ -259,7 +310,9 @@ export function mergeDocumentSides(
       backValue: back.dateOfExpiry,
       resolution: winningMrz?.dateOfExpiry
         ? `Used MRZ date of expiry (${winningMrz.dateOfExpiry})`
-        : `Used higher-confidence side`,
+        : aamva?.dateOfExpiry
+          ? `Used AAMVA barcode expiry (${aamva.dateOfExpiry})`
+          : `Used higher-confidence side`,
     });
   }
 
@@ -274,7 +327,9 @@ export function mergeDocumentSides(
       backValue: back.sex,
       resolution: winningMrz?.sex && winningMrz.sex !== 'Unspecified'
         ? `Used MRZ sex (${winningMrz.sex})`
-        : `Used front side (${front.sex})`,
+        : aamva?.sex
+          ? `Used AAMVA barcode sex (${aamva.sex})`
+          : `Used front side (${front.sex})`,
     });
   }
 
@@ -291,7 +346,9 @@ export function mergeDocumentSides(
         backValue: back.surname,
         resolution: winningMrz?.surname
           ? `Used MRZ surname (${winningMrz.surname})`
-          : `Used higher-confidence side`,
+          : aamva?.surname
+            ? `Used AAMVA barcode surname (${aamva.surname})`
+            : `Used higher-confidence side`,
       });
     }
   }
@@ -318,55 +375,67 @@ export function mergeDocumentSides(
     back.fieldSources.nationality
   );
 
-  const surname = pickNamePart(
-    winningMrz?.surname,
-    frontVizOnly?.surname ?? (!frontHasMrz ? front.surname : null),
-    backVizOnly?.surname ?? (!backHasMrz ? back.surname : null),
-    'surname',
-    fieldSources
-  ) ?? pickRichTextField(
-    front.surname,
-    back.surname,
-    front.confidence,
-    back.confidence,
-    'surname',
-    fieldSources,
-    front.fieldSources.surname,
-    back.fieldSources.surname
-  );
+  const surname =
+    pickNamePart(
+      winningMrz?.surname,
+      aamva?.surname,
+      frontVizOnly?.surname ?? (!frontHasMrz ? front.surname : null),
+      backVizOnly?.surname ?? (!backHasMrz ? back.surname : null),
+      'surname',
+      fieldSources
+    ) ??
+    pickRichTextField(
+      front.surname,
+      back.surname,
+      front.confidence,
+      back.confidence,
+      'surname',
+      fieldSources,
+      front.fieldSources.surname,
+      back.fieldSources.surname
+    );
 
-  const givenNames = pickNamePart(
-    winningMrz?.givenNames,
-    frontVizOnly?.givenNames ?? (!frontHasMrz ? front.givenNames : null),
-    backVizOnly?.givenNames ?? (!backHasMrz ? back.givenNames : null),
-    'givenNames',
-    fieldSources
-  ) ?? pickRichTextField(
-    front.givenNames,
-    back.givenNames,
-    front.confidence,
-    back.confidence,
-    'givenNames',
-    fieldSources,
-    front.fieldSources.givenNames,
-    back.fieldSources.givenNames
-  );
+  const givenNames =
+    pickNamePart(
+      winningMrz?.givenNames,
+      aamva?.givenNames,
+      frontVizOnly?.givenNames ?? (!frontHasMrz ? front.givenNames : null),
+      backVizOnly?.givenNames ?? (!backHasMrz ? back.givenNames : null),
+      'givenNames',
+      fieldSources
+    ) ??
+    pickRichTextField(
+      front.givenNames,
+      back.givenNames,
+      front.confidence,
+      back.confidence,
+      'givenNames',
+      fieldSources,
+      front.fieldSources.givenNames,
+      back.fieldSources.givenNames
+    );
 
   const surnames =
     winningMrz?.surnames && winningMrz.surnames.length > 0 && surname === winningMrz.surname
       ? winningMrz.surnames
-      : surname
-        ? surname.split(/\s+/).filter(Boolean)
-        : [];
+      : aamva?.surnames && aamva.surnames.length > 0 && surname === aamva.surname
+        ? aamva.surnames
+        : surname
+          ? surname.split(/\s+/).filter(Boolean)
+          : [];
 
   const givenNamesList =
     winningMrz?.givenNamesList &&
     winningMrz.givenNamesList.length > 0 &&
     givenNames === winningMrz.givenNames
       ? winningMrz.givenNamesList
-      : givenNames
-        ? givenNames.split(/\s+/).filter(Boolean)
-        : [];
+      : aamva?.givenNamesList &&
+          aamva.givenNamesList.length > 0 &&
+          givenNames === aamva.givenNames
+        ? aamva.givenNamesList
+        : givenNames
+          ? givenNames.split(/\s+/).filter(Boolean)
+          : [];
 
   const fullName =
     givenNames || surname
@@ -385,23 +454,29 @@ export function mergeDocumentSides(
     fieldSources.fullName =
       fieldSources.givenNames === 'MRZ+VIZ' || fieldSources.surname === 'MRZ+VIZ'
         ? 'MRZ+VIZ'
-        : fieldSources.givenNames ?? fieldSources.surname ?? 'VIZ';
+        : fieldSources.givenNames === 'BARCODE+VIZ' || fieldSources.surname === 'BARCODE+VIZ'
+          ? 'BARCODE+VIZ'
+          : fieldSources.givenNames ?? fieldSources.surname ?? 'VIZ';
   }
 
   const documentNumber = winningMrz?.documentNumber
-    ? (fieldSources.documentNumber =
-        front.documentNumber && back.documentNumber ? 'MRZ+VIZ' : 'MRZ',
+    ? ((fieldSources.documentNumber =
+        front.documentNumber && back.documentNumber ? 'MRZ+VIZ' : 'MRZ'),
       winningMrz.documentNumber)
-    : pickRichTextField(
-        front.documentNumber,
-        back.documentNumber,
-        front.confidence,
-        back.confidence,
-        'documentNumber',
-        fieldSources,
-        front.fieldSources.documentNumber,
-        back.fieldSources.documentNumber
-      );
+    : aamva?.documentNumber
+      ? ((fieldSources.documentNumber =
+          frontVizOnly?.documentNumber || backVizOnly?.documentNumber ? 'BARCODE+VIZ' : 'BARCODE'),
+        aamva.documentNumber)
+      : pickRichTextField(
+          front.documentNumber,
+          back.documentNumber,
+          front.confidence,
+          back.confidence,
+          'documentNumber',
+          fieldSources,
+          front.fieldSources.documentNumber,
+          back.fieldSources.documentNumber
+        );
 
   const personalNumber = pickRichTextField(
     front.personalNumber,
@@ -415,51 +490,65 @@ export function mergeDocumentSides(
   );
 
   const dateOfBirth = winningMrz?.dateOfBirth
-    ? (fieldSources.dateOfBirth =
-        (frontVizOnly?.dateOfBirth || backVizOnly?.dateOfBirth) ? 'MRZ+VIZ' : 'MRZ',
+    ? ((fieldSources.dateOfBirth =
+        frontVizOnly?.dateOfBirth || backVizOnly?.dateOfBirth ? 'MRZ+VIZ' : 'MRZ'),
       winningMrz.dateOfBirth)
-    : pickRichTextField(
-        front.dateOfBirth,
-        back.dateOfBirth,
-        front.confidence,
-        back.confidence,
-        'dateOfBirth',
-        fieldSources,
-        front.fieldSources.dateOfBirth,
-        back.fieldSources.dateOfBirth
-      );
+    : aamva?.dateOfBirth
+      ? ((fieldSources.dateOfBirth =
+          frontVizOnly?.dateOfBirth || backVizOnly?.dateOfBirth ? 'BARCODE+VIZ' : 'BARCODE'),
+        aamva.dateOfBirth)
+      : pickRichTextField(
+          front.dateOfBirth,
+          back.dateOfBirth,
+          front.confidence,
+          back.confidence,
+          'dateOfBirth',
+          fieldSources,
+          front.fieldSources.dateOfBirth,
+          back.fieldSources.dateOfBirth
+        );
 
   const dateOfExpiry = winningMrz?.dateOfExpiry
-    ? (fieldSources.dateOfExpiry =
-        (frontVizOnly?.dateOfExpiry || backVizOnly?.dateOfExpiry) ? 'MRZ+VIZ' : 'MRZ',
+    ? ((fieldSources.dateOfExpiry =
+        frontVizOnly?.dateOfExpiry || backVizOnly?.dateOfExpiry ? 'MRZ+VIZ' : 'MRZ'),
       winningMrz.dateOfExpiry)
+    : aamva?.dateOfExpiry
+      ? ((fieldSources.dateOfExpiry =
+          frontVizOnly?.dateOfExpiry || backVizOnly?.dateOfExpiry ? 'BARCODE+VIZ' : 'BARCODE'),
+        aamva.dateOfExpiry)
+      : pickRichTextField(
+          front.dateOfExpiry,
+          back.dateOfExpiry,
+          front.confidence,
+          back.confidence,
+          'dateOfExpiry',
+          fieldSources,
+          front.fieldSources.dateOfExpiry,
+          back.fieldSources.dateOfExpiry
+        );
+
+  const dateOfIssue = aamva?.dateOfIssue
+    ? ((fieldSources.dateOfIssue =
+        frontVizOnly?.dateOfIssue || backVizOnly?.dateOfIssue ? 'BARCODE+VIZ' : 'BARCODE'),
+      aamva.dateOfIssue)
     : pickRichTextField(
-        front.dateOfExpiry,
-        back.dateOfExpiry,
+        front.dateOfIssue,
+        back.dateOfIssue,
         front.confidence,
         back.confidence,
-        'dateOfExpiry',
+        'dateOfIssue',
         fieldSources,
-        front.fieldSources.dateOfExpiry,
-        back.fieldSources.dateOfExpiry
+        front.fieldSources.dateOfIssue,
+        back.fieldSources.dateOfIssue
       );
-
-  const dateOfIssue = pickRichTextField(
-    front.dateOfIssue,
-    back.dateOfIssue,
-    front.confidence,
-    back.confidence,
-    'dateOfIssue',
-    fieldSources,
-    front.fieldSources.dateOfIssue,
-    back.fieldSources.dateOfIssue
-  );
 
   let sex: ExtractedIdentity['sex'] = 'Unspecified';
   if (winningMrz?.sex && winningMrz.sex !== 'Unspecified') {
     sex = winningMrz.sex;
-    fieldSources.sex =
-      frontVizOnly?.sex || backVizOnly?.sex ? 'MRZ+VIZ' : 'MRZ';
+    fieldSources.sex = frontVizOnly?.sex || backVizOnly?.sex ? 'MRZ+VIZ' : 'MRZ';
+  } else if (aamva?.sex) {
+    sex = aamva.sex;
+    fieldSources.sex = frontVizOnly?.sex || backVizOnly?.sex ? 'BARCODE+VIZ' : 'BARCODE';
   } else if (front.sex !== 'Unspecified' && back.sex !== 'Unspecified') {
     sex = front.confidence >= back.confidence ? front.sex : back.sex;
     fieldSources.sex = 'VIZ';
@@ -589,7 +678,9 @@ export function mergeDocumentSides(
     .filter(Boolean)
     .join('\n\n');
 
-  const confidence = Math.round((front.confidence + back.confidence) / 2);
+  const confidence = aamva
+    ? Math.max(94, Math.round((front.confidence + back.confidence) / 2))
+    : Math.round((front.confidence + back.confidence) / 2);
   const processingTimeMs = front.processingTimeMs + back.processingTimeMs;
 
   const preferredSide = backHasMrz ? back : front;
@@ -597,9 +688,30 @@ export function mergeDocumentSides(
     preferredSide.vizLanguageMode ?? front.vizLanguageMode ?? back.vizLanguageMode;
   const vizLanguage = preferredSide.vizLanguage ?? front.vizLanguage ?? back.vizLanguage;
 
+  // Prefer portrait from whichever side is non-MRZ / front; fallback to either side
+  const portraitSide =
+    sideAssignment === 'swapped_detected'
+      ? back.portraitRegion
+        ? back
+        : front
+      : front.portraitRegion
+        ? front
+        : back;
+  const signatureSide = front.signatureRegion
+    ? front
+    : back.signatureRegion
+      ? back
+      : portraitSide;
+
   return {
     documentType: resolveDocumentType(front, back),
-    documentFormat: winningMrz ? winningMrz.format : 'VISUAL_ONLY',
+    documentFormat: winningMrz
+      ? winningMrz.format
+      : aamva
+        ? 'AAMVA_PDF417'
+        : winningBarcode
+          ? 'PDF417'
+          : 'VISUAL_ONLY',
     issuingCountry,
     issuingCountryName: resolveCountryName(issuingCountry),
     documentNumber,
@@ -628,12 +740,20 @@ export function mergeDocumentSides(
     eyeColor,
     hairColor,
     mrz: winningMrz,
+    barcode: winningBarcode,
+    portraitDataUrl: portraitSide.portraitDataUrl ?? front.portraitDataUrl ?? back.portraitDataUrl ?? null,
+    portraitRegion: portraitSide.portraitRegion ?? null,
+    signatureDataUrl: signatureSide.signatureDataUrl ?? front.signatureDataUrl ?? back.signatureDataUrl ?? null,
+    signatureRegion: signatureSide.signatureRegion ?? null,
+    specimen: mergeSpecimenResults(front.specimen, back.specimen),
+    crossValidation: mergeCrossValidation(front.crossValidation, back.crossValidation),
     mrzModel:
       winningMrz === back.mrz
         ? (back.mrzModel ?? front.mrzModel)
         : (front.mrzModel ?? back.mrzModel),
     vizLanguageMode,
     vizLanguage,
+    workerPreprocessed: front.workerPreprocessed || back.workerPreprocessed,
     unmappedFields,
     fieldSources,
     rawOcrText: mergedRawOcrText,

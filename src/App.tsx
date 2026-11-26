@@ -5,6 +5,7 @@ import { ExtractedResultsPanel } from './components/ExtractedResultsPanel';
 import { IntegrationGuide } from './components/IntegrationGuide';
 import {
   DocumentScanner,
+  isScanAbortedError,
   type DocumentQuad,
   type ExtractedIdentity,
   type MergedDocumentResult,
@@ -42,26 +43,38 @@ export default function App() {
   const [manualCorners, setManualCorners] = useState<DocumentQuad | null>(null);
   const [preprocess, setPreprocess] = useState(true);
   const [enhanceMrzPass, setEnhanceMrzPass] = useState(true);
+  const [enableBarcodePass, setEnableBarcodePass] = useState(true);
+  const [extractMedia, setExtractMedia] = useState(true);
   const [mrzModel, setMrzModel] = useState<MrzOcrModel>('ocrb');
   const [vizLanguageMode, setVizLanguageMode] = useState<VizLanguageMode>('auto');
   const [useCustomVizLanguages, setUseCustomVizLanguages] = useState(false);
   const [customVizLanguages, setCustomVizLanguages] = useState('eng+deu');
 
   const [isScanning, setIsScanning] = useState(false);
+  const [scanCancelled, setScanCancelled] = useState(false);
   const [progress, setProgress] = useState<ScanProgress | null>(null);
   const [result, setResult] = useState<ExtractedIdentity | MergedDocumentResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<SessionScanRecord[]>([]);
 
   const scannerRef = useRef<DocumentScanner | null>(null);
+  const scanAbortControllerRef = useRef<AbortController | null>(null);
+
+  const abortActiveScan = useCallback(() => {
+    if (scanAbortControllerRef.current) {
+      scanAbortControllerRef.current.abort('Scan cancelled by user');
+      scanAbortControllerRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     scannerRef.current = new DocumentScanner();
     return () => {
-      scannerRef.current?.terminate();
+      abortActiveScan();
+      void scannerRef.current?.terminate();
       scannerRef.current = null;
     };
-  }, []);
+  }, [abortActiveScan]);
 
   useEffect(() => {
     return () => {
@@ -91,20 +104,27 @@ export default function App() {
         corners: DocumentQuad | null;
         prep: boolean;
         mrzPass: boolean;
+        barcodePass: boolean;
+        mediaCrop: boolean;
         mrzModel: MrzOcrModel;
         vizMode: VizLanguageMode;
         customViz: string | undefined;
       }
     ) => {
+      abortActiveScan();
+      const controller = new AbortController();
+      scanAbortControllerRef.current = controller;
+
       if (!scannerRef.current) {
         scannerRef.current = new DocumentScanner();
       }
       setIsScanning(true);
+      setScanCancelled(false);
       setError(null);
       setProgress({
         stage: 'preprocessing',
         progress: 2,
-        message: 'Preparing image for client-side OCR…',
+        message: 'Preparing image for off-thread OCR preprocessing…',
       });
 
       try {
@@ -115,13 +135,24 @@ export default function App() {
           vizLanguages: opts.customViz,
           preprocess: opts.prep,
           enhanceMrzPass: opts.mrzPass,
+          enableBarcodePass: opts.barcodePass,
+          extractPortrait: opts.mediaCrop,
+          extractSignature: opts.mediaCrop,
+          detectSpecimen: true,
           perspectiveCorrection: opts.persp,
           corners: opts.corners ?? undefined,
           autoRotate: opts.autoRot,
           rotation: opts.rot,
           includePreviews: true,
-          onProgress: (p) => setProgress(p),
+          signal: controller.signal,
+          onProgress: (p) => {
+            if (scanAbortControllerRef.current === controller) {
+              setProgress(p);
+            }
+          },
         });
+
+        if (scanAbortControllerRef.current !== controller) return;
 
         setResult(extracted);
         setHistory((prev) => [
@@ -139,16 +170,28 @@ export default function App() {
           ...prev,
         ]);
       } catch (err) {
-        setError(
-          err instanceof Error
-            ? err.message
-            : 'An unexpected error occurred while running Tesseract OCR.'
-        );
+        if (isScanAbortedError(err)) {
+          if (scanAbortControllerRef.current === controller) {
+            setScanCancelled(true);
+            setProgress(null);
+          }
+          return;
+        }
+        if (scanAbortControllerRef.current === controller) {
+          setError(
+            err instanceof Error
+              ? err.message
+              : 'An unexpected error occurred while running Tesseract OCR.'
+          );
+        }
       } finally {
-        setIsScanning(false);
+        if (scanAbortControllerRef.current === controller) {
+          scanAbortControllerRef.current = null;
+          setIsScanning(false);
+        }
       }
     },
-    []
+    [abortActiveScan]
   );
 
   const runPairScan = useCallback(
@@ -160,15 +203,22 @@ export default function App() {
         persp: boolean;
         prep: boolean;
         mrzPass: boolean;
+        barcodePass: boolean;
+        mediaCrop: boolean;
         mrzModel: MrzOcrModel;
         vizMode: VizLanguageMode;
         customViz: string | undefined;
       }
     ) => {
+      abortActiveScan();
+      const controller = new AbortController();
+      scanAbortControllerRef.current = controller;
+
       if (!scannerRef.current) {
         scannerRef.current = new DocumentScanner();
       }
       setIsScanning(true);
+      setScanCancelled(false);
       setError(null);
       setProgress({
         stage: 'preprocessing',
@@ -184,11 +234,22 @@ export default function App() {
           vizLanguages: opts.customViz,
           preprocess: opts.prep,
           enhanceMrzPass: opts.mrzPass,
+          enableBarcodePass: opts.barcodePass,
+          extractPortrait: opts.mediaCrop,
+          extractSignature: opts.mediaCrop,
+          detectSpecimen: true,
           perspectiveCorrection: opts.persp,
           autoRotate: opts.autoRot,
           includePreviews: true,
-          onProgress: (p) => setProgress(p),
+          signal: controller.signal,
+          onProgress: (p) => {
+            if (scanAbortControllerRef.current === controller) {
+              setProgress(p);
+            }
+          },
         });
+
+        if (scanAbortControllerRef.current !== controller) return;
 
         setResult(merged);
         setHistory((prev) => [
@@ -207,17 +268,36 @@ export default function App() {
           ...prev,
         ]);
       } catch (err) {
-        setError(
-          err instanceof Error
-            ? err.message
-            : 'An unexpected error occurred while scanning front & back sides.'
-        );
+        if (isScanAbortedError(err)) {
+          if (scanAbortControllerRef.current === controller) {
+            setScanCancelled(true);
+            setProgress(null);
+          }
+          return;
+        }
+        if (scanAbortControllerRef.current === controller) {
+          setError(
+            err instanceof Error
+              ? err.message
+              : 'An unexpected error occurred while scanning front & back sides.'
+          );
+        }
       } finally {
-        setIsScanning(false);
+        if (scanAbortControllerRef.current === controller) {
+          scanAbortControllerRef.current = null;
+          setIsScanning(false);
+        }
       }
     },
-    []
+    [abortActiveScan]
   );
+
+  const handleCancelScan = useCallback(() => {
+    abortActiveScan();
+    setIsScanning(false);
+    setProgress(null);
+    setScanCancelled(true);
+  }, [abortActiveScan]);
 
   const activeCustomViz = useCustomVizLanguages ? customVizLanguages.trim() || 'eng' : undefined;
 
@@ -231,6 +311,7 @@ export default function App() {
     setManualCorners(null);
     setResult(null);
     setError(null);
+    setScanCancelled(false);
     setActiveView('workbench');
     void runScan(file, {
       rot: 0,
@@ -239,6 +320,8 @@ export default function App() {
       corners: null,
       prep: preprocess,
       mrzPass: enhanceMrzPass,
+      barcodePass: enableBarcodePass,
+      mediaCrop: extractMedia,
       mrzModel,
       vizMode: vizLanguageMode,
       customViz: activeCustomViz,
@@ -246,6 +329,8 @@ export default function App() {
   };
 
   const handleClearFile = () => {
+    abortActiveScan();
+    setIsScanning(false);
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     setSelectedFile(null);
     setPreviewUrl(null);
@@ -253,6 +338,7 @@ export default function App() {
     setManualCorners(null);
     setResult(null);
     setError(null);
+    setScanCancelled(false);
     setProgress(null);
   };
 
@@ -260,6 +346,7 @@ export default function App() {
     const nextUrl = URL.createObjectURL(file);
     setResult(null);
     setError(null);
+    setScanCancelled(false);
     setActiveView('workbench');
 
     if (side === 'front') {
@@ -272,6 +359,8 @@ export default function App() {
           persp: perspectiveCorrection,
           prep: preprocess,
           mrzPass: enhanceMrzPass,
+          barcodePass: enableBarcodePass,
+          mediaCrop: extractMedia,
           mrzModel,
           vizMode: vizLanguageMode,
           customViz: activeCustomViz,
@@ -287,6 +376,8 @@ export default function App() {
           persp: perspectiveCorrection,
           prep: preprocess,
           mrzPass: enhanceMrzPass,
+          barcodePass: enableBarcodePass,
+          mediaCrop: extractMedia,
           mrzModel,
           vizMode: vizLanguageMode,
           customViz: activeCustomViz,
@@ -296,8 +387,11 @@ export default function App() {
   };
 
   const handleClearPairFile = (side: 'front' | 'back') => {
+    abortActiveScan();
+    setIsScanning(false);
     setResult(null);
     setError(null);
+    setScanCancelled(false);
     setProgress(null);
     if (side === 'front') {
       if (frontPreviewUrl) URL.revokeObjectURL(frontPreviewUrl);
@@ -334,6 +428,8 @@ export default function App() {
         persp: perspectiveCorrection,
         prep: preprocess,
         mrzPass: enhanceMrzPass,
+        barcodePass: enableBarcodePass,
+        mediaCrop: extractMedia,
         mrzModel,
         vizMode: vizLanguageMode,
         customViz: activeCustomViz,
@@ -349,6 +445,8 @@ export default function App() {
       corners: manualCorners,
       prep: preprocess,
       mrzPass: enhanceMrzPass,
+      barcodePass: enableBarcodePass,
+      mediaCrop: extractMedia,
       mrzModel,
       vizMode: vizLanguageMode,
       customViz: activeCustomViz,
@@ -384,7 +482,7 @@ export default function App() {
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
       {/* Top Bar Contract: Brand wordmark — Nav links — 1 Primary action */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-20">
-        <div className="max-w-[1400px] mx-auto px-4 sm:px-6 h-15 flex items-center justify-between gap-8">
+        <div className="max-w-[1400px] mx-auto px-4 sm:px-6 h-15 flex items-center justify-between gap-4 sm:gap-8">
           <a
             href="#workbench"
             onClick={(e) => {
@@ -396,7 +494,7 @@ export default function App() {
             DocScan OCR
           </a>
 
-          <nav className="flex items-center gap-6 text-sm font-medium text-slate-600">
+          <nav className="flex items-center gap-4 sm:gap-6 text-sm font-medium text-slate-600 overflow-x-auto">
             <button
               type="button"
               onClick={() => setActiveView('workbench')}
@@ -432,7 +530,7 @@ export default function App() {
             </button>
           </nav>
 
-          <div className="flex items-center shrink-0">
+          <div className="hidden sm:flex items-center shrink-0">
             {result ? (
               <button
                 type="button"
@@ -471,7 +569,7 @@ export default function App() {
           </h1>
           <p className="text-sm text-slate-600 mt-1 max-w-3xl">
             {activeView === 'workbench'
-              ? 'Auto-rectifies 4-corner perspective, straightens rotated scans, merges front & back IDs, and extracts Machine Readable Zone check digits (OCR-B default) and country-routed native Visual Inspection Zone fields client-side.'
+              ? 'Offloads 4-corner perspective, orientation & MRZ preprocessing to OffscreenCanvas Web Workers, crops portraits & signatures, detects specimen watermarks, decodes PDF417 barcodes, and extracts OCR-B MRZ & native VIZ fields client-side.'
               : activeView === 'history'
                 ? 'In-memory scans processed during this browser session. No document images or personal data leave your device.'
                 : 'Drop-in TypeScript module architecture designed to be copied or embedded via CDN straight into web applications.'}
@@ -498,14 +596,20 @@ export default function App() {
                 manualCorners={manualCorners}
                 preprocess={preprocess}
                 enhanceMrzPass={enhanceMrzPass}
+                enableBarcodePass={enableBarcodePass}
+                extractMedia={extractMedia}
                 mrzModel={mrzModel}
                 vizLanguageMode={vizLanguageMode}
                 useCustomVizLanguages={useCustomVizLanguages}
                 customVizLanguages={customVizLanguages}
                 onChangeScanMode={(mode) => {
+                  abortActiveScan();
+                  setIsScanning(false);
+                  setProgress(null);
                   setScanMode(mode);
                   setResult(null);
                   setError(null);
+                  setScanCancelled(false);
                 }}
                 onSelectFile={handleSelectFile}
                 onClearFile={handleClearFile}
@@ -517,6 +621,8 @@ export default function App() {
                 onChangeManualCorners={setManualCorners}
                 onTogglePreprocess={setPreprocess}
                 onToggleMrzPass={setEnhanceMrzPass}
+                onToggleBarcodePass={setEnableBarcodePass}
+                onToggleExtractMedia={setExtractMedia}
                 onChangeMrzModel={setMrzModel}
                 onChangeVizLanguageMode={(mode) => {
                   setUseCustomVizLanguages(false);
@@ -525,6 +631,7 @@ export default function App() {
                 onToggleCustomVizLanguages={setUseCustomVizLanguages}
                 onChangeCustomVizLanguages={setCustomVizLanguages}
                 onTriggerScan={handleTriggerScan}
+                onCancelScan={handleCancelScan}
               />
             </div>
 
@@ -532,6 +639,7 @@ export default function App() {
               <ExtractedResultsPanel
                 result={result}
                 isScanning={isScanning}
+                scanCancelled={scanCancelled}
                 error={error}
                 onExportJson={handleExportJson}
               />
@@ -621,6 +729,8 @@ export default function App() {
                               if (item.result.vizLanguageMode) {
                                 setVizLanguageMode(item.result.vizLanguageMode);
                               }
+                              setScanCancelled(false);
+                              setError(null);
                               setResult(item.result);
                               setActiveView('workbench');
                             }}
@@ -653,7 +763,7 @@ export default function App() {
 
       <footer className="border-t border-slate-200 bg-white mt-auto">
         <div className="max-w-[1400px] mx-auto px-4 sm:px-6 py-4 flex flex-wrap items-center justify-between gap-4 text-xs text-slate-500">
-          <span>Client-side document OCR workbench · Tesseract.js + ICAO 9303 MRZ</span>
+          <span>Client-side document OCR workbench · Tesseract.js + OffscreenCanvas + PDF417 AAMVA</span>
           <span>All image processing stays in browser memory</span>
         </div>
       </footer>

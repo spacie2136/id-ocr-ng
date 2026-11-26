@@ -8,7 +8,13 @@ export type DocumentType =
 
 export type MrzFormat = 'TD1' | 'TD2' | 'TD3' | 'MRVA' | 'MRVB';
 
-export type FieldSource = 'MRZ' | 'VIZ' | 'MRZ+VIZ' | 'COMPUTED';
+export type FieldSource =
+  | 'MRZ'
+  | 'VIZ'
+  | 'MRZ+VIZ'
+  | 'BARCODE'
+  | 'BARCODE+VIZ'
+  | 'COMPUTED';
 
 export type MrzOcrModel = 'ocrb' | 'standard';
 
@@ -22,18 +28,71 @@ export type QualityIssueCode =
   | 'no_document'
   | 'camera_moving';
 
+export interface NormalizedRect {
+  /** Normalized left offset [0..1] */
+  x: number;
+  /** Normalized top offset [0..1] */
+  y: number;
+  /** Normalized width [0..1] */
+  width: number;
+  /** Normalized height [0..1] */
+  height: number;
+}
+
+export interface CroppedRegionInfo {
+  /** Base64 PNG data URL of the cropped upright region */
+  dataUrl: string;
+  /** Normalized [0..1] bounding box in the upright, perspective-corrected document image */
+  bbox: NormalizedRect;
+  /** Cropped pixel width */
+  width: number;
+  /** Cropped pixel height */
+  height: number;
+  /** Strategy used to isolate the region */
+  detectionMethod: 'viz_label' | 'pixel_contour' | 'layout_heuristic';
+}
+
+export interface SpecimenDetectionResult {
+  /** True when specimen/sample/void watermark or reserved ICAO test indicators were found */
+  isSpecimen: boolean;
+  /** Heuristic confidence score [0..100] */
+  confidence: number;
+  /** Human-readable matched indicators (e.g. 'SPECIMEN watermark', 'MUSTER', 'ICAO UTO test code') */
+  matchedIndicators: string[];
+  /** Pipeline sources that triggered specimen detection */
+  sources: Array<'ocr_text' | 'mrz' | 'barcode' | 'watermark_visual'>;
+}
+
+export interface CrossValidationDiscrepancy {
+  field: string;
+  mrzValue: string;
+  vizValue: string;
+  severity: 'warning' | 'critical';
+}
+
+export interface SingleSideCrossValidation {
+  /** True when an MRZ zone was present and cross-checked against Visual Inspection Zone fields */
+  performed: boolean;
+  /** Field keys whose MRZ and VIZ values agreed */
+  matchedFields: string[];
+  /** Fields where MRZ and VIZ disagreed on this document side */
+  discrepancies: CrossValidationDiscrepancy[];
+  /** True when zero discrepancies were detected */
+  consistent: boolean;
+}
+
 export interface QualityGateOptions {
-  /** Minimum focus/edge sharpness score [0..100] required to pass (default: 34) */
+  /** Minimum focus/edge sharpness score [0..100] required to pass (default: 26) */
   minSharpness?: number;
   /** Maximum fraction [0..1] of specular glare hotspot pixels inside ROI (default: 0.045) */
   maxGlareRatio?: number;
-  /** Minimum mean luminance [0..255] before flagging underexposure (default: 48) */
+  /** Minimum mean luminance [0..255] before flagging underexposure (default: 45) */
   minBrightness?: number;
-  /** Maximum mean luminance [0..255] before flagging washed-out overexposure (default: 242) */
+  /** Maximum mean luminance [0..255] before flagging washed-out overexposure (default: 244) */
   maxBrightness?: number;
   /** Require structured document text/edges or a detected card border (default: true) */
   requireDocument?: boolean;
-  /** Maximum frame-to-frame luminance delta [0..255] for live camera stability (default: 5.5) */
+  /** Maximum frame-to-frame luminance delta [0..255] for live camera stability (default: 7.5) */
   maxMotionDelta?: number;
 }
 
@@ -66,10 +125,16 @@ export interface ImageQualityReport {
 }
 
 export interface CameraAutoCaptureOptions extends QualityGateOptions {
-  /** Frame sampling interval in milliseconds (default: 180) */
+  /** Frame sampling interval in milliseconds (default: 170) */
   sampleIntervalMs?: number;
-  /** Number of consecutive passing stable frames before auto-shutter triggers (default: 3) */
+  /** Number of consecutive passing stable frames before auto-shutter triggers (default: 2) */
   requiredStableFrames?: number;
+  /**
+   * Optional normalized [0..1] sub-region of the video frame matching the visible UI viewfinder
+   * (e.g. `object-cover` crop on portrait mobile cameras). When supplied, both live quality checks
+   * and full-res captures crop cleanly to this rectangle instead of saving hidden background margins.
+   */
+  captureRegion?: NormalizedRect | (() => NormalizedRect | null);
   /** Output File MIME type on auto-capture (default: 'image/png') */
   mimeType?: 'image/png' | 'image/jpeg' | 'image/webp';
   /** Encoder quality [0..1] for JPEG/WebP captures (default: 0.94) */
@@ -141,6 +206,63 @@ export interface MrzParsedData {
   totalChecks: number;
 }
 
+export interface AamvaParsedData {
+  /** 6-digit AAMVA Issuer Identification Number (e.g. '636014' for California) */
+  iin: string | null;
+  /** AAMVA CDS version number (e.g. '08', '09', '10') */
+  version: string | null;
+  /** Jurisdiction version number */
+  jurisdictionVersion: string | null;
+  /** Primary subfile type ('DL' = Driver License, 'ID' = Identification Card, etc.) */
+  subfileType: 'DL' | 'ID' | string | null;
+  /** Resolved issuing state/province name from IIN or DAJ (e.g. 'California') */
+  jurisdictionName: string | null;
+  /** ISO 3166-1 alpha-3 issuing country ('USA' | 'CAN' | 'MEX' | ...) */
+  issuingCountry: string | null;
+  surname: string | null;
+  surnames: string[];
+  firstName: string | null;
+  middleName: string | null;
+  givenNames: string | null;
+  givenNamesList: string[];
+  nameSuffix: string | null;
+  fullName: string | null;
+  /** Customer / Driver License number (DAQ) */
+  documentNumber: string | null;
+  /** Document discriminator (DCF) */
+  documentDiscriminator: string | null;
+  /** Inventory control number (DCK) */
+  inventoryControlNumber: string | null;
+  dateOfBirth: string | null;
+  dateOfIssue: string | null;
+  dateOfExpiry: string | null;
+  sex: 'M' | 'F' | 'X' | null;
+  streetAddress: string | null;
+  city: string | null;
+  state: string | null;
+  postalCode: string | null;
+  address: string | null;
+  licenseClass: string | null;
+  restrictions: string | null;
+  endorsements: string | null;
+  height: string | null;
+  weight: string | null;
+  eyeColor: string | null;
+  hairColor: string | null;
+  organDonor: boolean | null;
+  veteran: boolean | null;
+  realIdCompliance: string | null;
+  /** Raw decoded AAMVA 3-letter element code -> trimmed string dictionary */
+  fields: Record<string, string>;
+}
+
+export interface BarcodeParsedData {
+  format: 'PDF417';
+  rawText: string;
+  detector: 'native' | 'zxing';
+  aamva: AamvaParsedData | null;
+}
+
 export interface VizLineBox {
   text: string;
   bbox: {
@@ -192,7 +314,7 @@ export interface OrientationInfo {
 
 export interface ExtractedIdentity {
   documentType: DocumentType;
-  documentFormat: MrzFormat | 'VISUAL_ONLY';
+  documentFormat: MrzFormat | 'AAMVA_PDF417' | 'PDF417' | 'VISUAL_ONLY';
   issuingCountry: string | null;
   issuingCountryName: string | null;
   documentNumber: string | null;
@@ -221,12 +343,28 @@ export interface ExtractedIdentity {
   eyeColor: string | null;
   hairColor: string | null;
   mrz: MrzParsedData | null;
+  /** Decoded PDF417 / AAMVA barcode payload if present (e.g., US/CA Driver License or ID back) */
+  barcode: BarcodeParsedData | null;
+  /** Cropped upright holder face portrait PNG data URL when detected */
+  portraitDataUrl?: string | null;
+  /** Normalized crop coordinates & metadata for the extracted holder portrait */
+  portraitRegion?: CroppedRegionInfo | null;
+  /** Cropped upright holder signature PNG data URL when detected */
+  signatureDataUrl?: string | null;
+  /** Normalized crop coordinates & metadata for the extracted holder signature */
+  signatureRegion?: CroppedRegionInfo | null;
+  /** Specimen / sample / void watermark & test-document detection result */
+  specimen?: SpecimenDetectionResult;
+  /** Single-side consistency check between decoded MRZ fields and VIZ OCR fields */
+  crossValidation?: SingleSideCrossValidation;
   /** MRZ OCR model actually used for the dedicated MRZ pass ('ocrb' or 'standard') */
   mrzModel?: MrzOcrModel;
   /** VIZ language strategy used for Visual Inspection Zone extraction */
   vizLanguageMode?: VizLanguageMode;
   /** Final Tesseract language pack string used for VIZ OCR (e.g. 'eng', 'eng+deu', 'eng+deu+spa+fra') */
   vizLanguage?: string;
+  /** True when OffscreenCanvas + Web Worker preprocessing offloaded pixel operations off the main thread */
+  workerPreprocessed?: boolean;
   unmappedFields: Record<string, string>;
   fieldSources: Record<string, FieldSource>;
   rawOcrText: string;
@@ -258,7 +396,7 @@ export interface MergedDocumentResult extends ExtractedIdentity {
     back: ExtractedIdentity;
   };
   /** Indicates how front and back sides were matched during merging */
-  sideAssignment: 'front+back' | 'swapped_detected' | 'both_mrz' | 'visual_only';
+  sideAssignment: 'front+back' | 'swapped_detected' | 'both_mrz' | 'barcode_back' | 'visual_only';
   /** Cross-side verification warnings when front and back disagree (e.g. different doc number or DOB) */
   conflicts: SideConsistencyConflict[];
   /** True when no key identity conflicts exist between front and back */
@@ -268,6 +406,7 @@ export interface MergedDocumentResult extends ExtractedIdentity {
 export type ScanStage =
   | 'quality_check'
   | 'detecting_perspective'
+  | 'detecting_barcode'
   | 'detecting_orientation'
   | 'preprocessing'
   | 'initializing_ocr'
@@ -292,6 +431,8 @@ export interface TesseractWorkerConfig {
   langPath?: string;
   /** Set false when loading workerPath directly without wrapping in a Blob URL */
   workerBlobURL?: boolean;
+  /** Offload perspective warp & grayscale/MRZ preprocessing to a Web Worker with OffscreenCanvas when available (default: true) */
+  useWorkerPreprocessing?: boolean;
   /** MRZ model to use for dedicated MRZ pass: 'ocrb' (default) or 'standard' (uses main language model) */
   mrzModel?: MrzOcrModel;
   /** Traineddata code for dedicated OCR-B MRZ worker (defaults to 'ocrb_int') */
@@ -315,6 +456,14 @@ export interface ScannerOptions extends TesseractWorkerConfig {
   preprocess?: boolean;
   /** Run a dedicated high-contrast MRZ bottom-strip OCR pass (default: true) */
   enhanceMrzPass?: boolean;
+  /** Scan for PDF417 / AAMVA 2D barcodes via native BarcodeDetector + ZXing fallback (default: true) */
+  enableBarcodePass?: boolean;
+  /** Extract and return a cropped PNG portrait data URL (`portraitDataUrl`) from the upright document (default: true) */
+  extractPortrait?: boolean;
+  /** Extract and return a cropped PNG holder signature data URL (`signatureDataUrl`) when present (default: true) */
+  extractSignature?: boolean;
+  /** Flag specimen / sample / void watermarks & reserved ICAO test codes (`specimen`) (default: true) */
+  detectSpecimen?: boolean;
   /** Automatically detect and dewarp 4-corner perspective distortion (default: true) */
   perspectiveCorrection?: boolean;
   /** Explicit normalized [0..1] 4-corner quad override to warp before OCR */
@@ -333,6 +482,8 @@ export interface ScannerOptions extends TesseractWorkerConfig {
   qualityGateOptions?: QualityGateOptions;
   /** Include processed preview data URLs in the result (default: true) */
   includePreviews?: boolean;
+  /** Optional AbortSignal to cleanly cancel an in-flight scan across preprocessing & OCR stages */
+  signal?: AbortSignal;
   /** Progress listener callback */
   onProgress?: (progress: ScanProgress) => void;
 }
@@ -361,9 +512,12 @@ export interface PreprocessedResult {
   height: number;
 }
 
+export type ImageSurface = HTMLImageElement | HTMLCanvasElement | ImageBitmap;
+
 export type ImageInput =
   | File
   | Blob
   | string
   | HTMLImageElement
-  | HTMLCanvasElement;
+  | HTMLCanvasElement
+  | ImageBitmap;

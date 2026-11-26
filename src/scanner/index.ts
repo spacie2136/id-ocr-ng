@@ -1,6 +1,25 @@
 export { SCANNER_VERSION } from './version';
 export { DocumentScanner, scanDocumentImage, scanDocumentPair } from './ocrEngine';
+export {
+  ScanAbortedError,
+  isScanAbortedError,
+  throwIfScanAborted,
+  supportsWorkerPreprocessing,
+} from './preprocessWorker';
 export { mergeDocumentSides } from './pairMerger';
+export {
+  extractPortraitAndSignature,
+  detectPortraitBoundsFromRgba,
+  detectSignatureBoundsFromRgba,
+  buildColoredWatermarkOcrCanvas,
+} from './mediaExtractor';
+export {
+  detectSpecimenWatermark,
+  crossValidateMrzAndViz,
+  mergeSpecimenResults,
+} from './specimenValidator';
+export { parseAamvaPayload, AAMVA_IIN_DIRECTORY, normalizeAamvaDate } from './aamvaParser';
+export { detectPdf417Barcode } from './pdf417Decoder';
 export {
   detectDocumentQuad,
   orderQuadCorners,
@@ -9,6 +28,7 @@ export {
 export {
   assessImageQuality,
   assessCanvasQuality,
+  computeVisibleVideoCrop,
   CameraAutoCapture,
   watchCameraAutoCapture,
   QualityGateError,
@@ -25,14 +45,19 @@ export {
 } from './vizLanguages';
 export {
   loadImageElement,
+  loadImageSurface,
   preprocessDocumentImage,
   sampleDownscaledGrayscale,
 } from './imagePreprocessor';
 export { analyzeDocumentOrientation, type OrientationAnalysis } from './orientation';
 export { ICAO_COUNTRY_CODES, resolveCountryName } from './countries';
 export type {
+  AamvaParsedData,
+  BarcodeParsedData,
   CameraAutoCaptureOptions,
   CheckDigitStatus,
+  CroppedRegionInfo,
+  CrossValidationDiscrepancy,
   DocumentQuad,
   DocumentType,
   ExtractedIdentity,
@@ -40,10 +65,12 @@ export type {
   GrayscaleBuffer,
   ImageInput,
   ImageQualityReport,
+  ImageSurface,
   MergedDocumentResult,
   MrzFormat,
   MrzOcrModel,
   MrzParsedData,
+  NormalizedRect,
   OrientationInfo,
   PairScanOptions,
   PerspectiveInfo,
@@ -55,6 +82,8 @@ export type {
   ScanStage,
   ScannerOptions,
   SideConsistencyConflict,
+  SingleSideCrossValidation,
+  SpecimenDetectionResult,
   TesseractWorkerConfig,
   VizLanguageMode,
   VizLineBox,
