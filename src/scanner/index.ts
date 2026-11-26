@@ -33,7 +33,7 @@ export {
   watchCameraAutoCapture,
   QualityGateError,
 } from './qualityGate';
-export { parseMrzFromText, computeCheckDigit } from './mrzParser';
+export { parseMrzFromText, computeCheckDigit, synthesizeConsensusMrz } from './mrzParser';
 export { parseVizText, normalizeVisualDate } from './vizParser';
 export {
   DEFAULT_COUNTRY_VIZ_LANGUAGES,
@@ -44,10 +44,13 @@ export {
   resolveVizPassStrategy,
 } from './vizLanguages';
 export {
+  detectDynamicMrzBand,
+  flattenShadowIlluminationBuffer,
   loadImageElement,
   loadImageSurface,
   preprocessDocumentImage,
   sampleDownscaledGrayscale,
+  type DynamicMrzBandResult,
 } from './imagePreprocessor';
 export { analyzeDocumentOrientation, type OrientationAnalysis } from './orientation';
 export { ICAO_COUNTRY_CODES, resolveCountryName } from './countries';

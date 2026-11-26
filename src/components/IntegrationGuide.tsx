@@ -15,7 +15,7 @@ const UMD_SNIPPET = `<!-- Always use the latest build via GitHub + jsDelivr (or 
   console.log('Loaded DocScan OCR v' + SCANNER_VERSION);
 
   const scanner = new DocumentScanner({
-    useWorkerPreprocessing: true, // default: offloads perspective warp & contrast/MRZ preprocessing via OffscreenCanvas Web Worker
+    useWorkerPreprocessing: true, // default: OffscreenCanvas worker (shadow-resilient VIZ & dynamic MRZ framing)
   });
 
   // Live camera auto-capture locked to the visible viewfinder crop (object-cover safe on phones)
@@ -37,7 +37,7 @@ const UMD_SNIPPET = `<!-- Always use the latest build via GitHub + jsDelivr (or 
           extractPortrait: true,   // default: returns portraitDataUrl & portraitRegion
           extractSignature: true,  // default: returns signatureDataUrl & signatureRegion
           detectSpecimen: true,    // default: flags MUSTER/SPECIMEN/VOID/UTO watermarks
-          mrzModel: 'ocrb',        // default OCR-B MRZ traineddata
+          mrzModel: 'ocrb',        // default OCR-B MRZ traineddata + consensus check-digit voting
           vizLanguageMode: 'auto', // default: routes non-English docs to native scripts (eng+deu, eng+spa, etc.)
           signal: activeController.signal,
         });
@@ -119,6 +119,7 @@ const SOURCE_SNIPPET = `import {
   detectSpecimenWatermark,
   isScanAbortedError,
   parseAamvaPayload,
+  synthesizeConsensusMrz,
 } from './scanner';
 
 const scanner = new DocumentScanner({
@@ -160,10 +161,11 @@ const controller = new CameraAutoCapture(videoEl, {
 });
 controller.start();
 
-// 2. Standalone pure-TS AAMVA, MRZ↔VIZ cross-validation, and specimen helpers
+// 2. Standalone pure-TS AAMVA, consensus MRZ voting, MRZ↔VIZ validation, and specimen helpers
 const aamva = parseAamvaPayload(rawPdf417Text);
-const specimenCheck = detectSpecimenWatermark({ rawOcrText: ocrText, mrz });
-const mrzVizAudit = crossValidateMrzAndViz(mrz, viz);
+const consensusMrz = synthesizeConsensusMrz([pass1Mrz, pass2Mrz, gridMrz]);
+const specimenCheck = detectSpecimenWatermark({ rawOcrText: ocrText, mrz: consensusMrz });
+const mrzVizAudit = crossValidateMrzAndViz(consensusMrz, viz);
 console.log(aamva?.fullName, specimenCheck.isSpecimen, mrzVizAudit.discrepancies);
 
 // 3. Disable portrait/signature cropping or worker preprocessing per scan
@@ -177,7 +179,7 @@ const minimalScan = await scanner.scan(uploadedFile, {
 const MODULES = [
   {
     name: 'mediaExtractor.ts',
-    role: 'Pure-JS RGBA face portrait detector, multilingual VIZ-anchored holder signature cropper (with cursive ink fallback), PNG data URL exporter, and crimson/diagonal watermark OCR isolation pass.',
+    role: 'Pure-JS RGBA face portrait detector (with bilateral symmetry & neon hologram weighting), multilingual VIZ-anchored holder signature cropper (with horizontal-rule filtering), PNG exporter, and crimson watermark OCR isolator.',
   },
   {
     name: 'specimenValidator.ts',
@@ -185,7 +187,7 @@ const MODULES = [
   },
   {
     name: 'preprocessWorker.ts',
-    role: 'Self-contained OffscreenCanvas + ImageBitmap Web Worker client (PreprocessWorkerClient) offloading 2400px perspective homography, grayscale sampling, contrast enhancement & MRZ strips off the main thread, plus ScanAbortedError / AbortSignal cancellation helpers.',
+    role: 'Self-contained OffscreenCanvas + ImageBitmap Web Worker client (PreprocessWorkerClient) offloading 2400px perspective homography, shadow illumination flattening, dynamic MRZ band detection, and flat-field MRZ strips off the main thread, plus AbortSignal helpers.',
   },
   {
     name: 'pdf417Decoder.ts & aamvaParser.ts',
@@ -197,7 +199,7 @@ const MODULES = [
   },
   {
     name: 'ocrEngine.ts & vizLanguages.ts',
-    role: 'Multi-worker Tesseract.js + PDF417 orchestration, OffscreenCanvas preprocessing dispatch, portrait/signature crop & watermark probe, single-side MRZ↔VIZ cross-validation, AbortSignal worker termination, country-routed native VIZ pass, and scanPair().',
+    role: 'Multi-worker Tesseract.js + PDF417 orchestration, consensus MRZ voting, OffscreenCanvas preprocessing dispatch, portrait/signature crop & watermark probe, single-side MRZ↔VIZ cross-validation, AbortSignal termination, native VIZ pass, and scanPair().',
   },
   {
     name: 'perspective.ts',
@@ -213,11 +215,11 @@ const MODULES = [
   },
   {
     name: 'imagePreprocessor.ts',
-    role: 'Main-thread HTMLCanvasElement fallback + transferable ImageBitmap loader for scaling, arbitrary-angle rotation/deskewing, contrast stretching, and flat-field MRZ isolation.',
+    role: 'Main-thread HTMLCanvasElement fallback + transferable ImageBitmap loader with 16×12 shadow illumination flattening, dynamic monospace MRZ band localization, and flat-field MRZ isolation.',
   },
   {
     name: 'mrzParser.ts & vizParser.ts',
-    role: 'Pure TypeScript ICAO 9303 MRZ parser (TD1/TD2/TD3/MRV) + multilingual pan-European Visual Inspection Zone extractor.',
+    role: 'Pure TypeScript ICAO 9303 MRZ parser (TD1/TD2/TD3/MRV) with cross-candidate consensus voting & joint DOB/composite check-digit repair, plus multilingual Visual Inspection Zone extractor.',
   },
   {
     name: 'countries.ts, version.ts & types.ts',
@@ -400,7 +402,7 @@ export const IntegrationGuide: React.FC = () => {
             <div className="flex items-center gap-2">
               <Terminal className="w-4 h-4 text-blue-600" />
               <h3 className="text-sm font-semibold text-slate-900">
-                03. Standalone Validation, AAMVA Parser &amp; Viewport Cropping
+                03. Standalone Validation, AAMVA Parser &amp; Consensus Helpers
               </h3>
             </div>
             <button

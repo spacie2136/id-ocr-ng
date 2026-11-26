@@ -11,7 +11,7 @@ import type {
 const WORK_WIDTH = 360;
 
 const SIGNATURE_LABEL_RE =
-  /\b(?:signature|holder['’`]?s?\s*signature|unterschrift|firma(?:\s*del\s*titular)?|para[sš]as|podpis|assinatura|handtekening|allkiri|al[aá][ií]r[aá]s)\b/i;
+  /\b(?:signature|holder['’`]?s?\s*sig(?:nature)?|unterschrift|firma(?:\s*del\s*titular)?|(?:vlastoru[cč]n[io]\s*)?p[ao]tp[il]{1,2}[sz]?|para[sš]as|podpis|assinatura|handtekening|allkiri|al[aá][ií]r[aá]s|semn[aă]tur[aă]|allekirjoitus|underskrift|paraksts)\b/i;
 
 export interface ExtractMediaOptions {
   documentType?: DocumentType;
@@ -112,7 +112,8 @@ function buildTextMask(
     const bw = b.x1 - b.x0;
     const bh = b.y1 - b.y0;
     const cleaned = b.text.replace(/[^A-Za-z0-9\u00C0-\u024F]/g, '');
-    if (cleaned.length <= 2 && bw < workW * 0.045) continue;
+    // Skip 1-2 char OCR boxes so hallucinated portrait noise ("EA") or cursive strokes ("7", "s") aren't erased
+    if (cleaned.length <= 2) continue;
     if (bw > workW * 0.45 && bh > workH * 0.25) continue;
 
     const padX = 2;
@@ -137,31 +138,37 @@ function estimateMrzTopRatio(
   workH: number,
   mrz?: MrzParsedData | null
 ): number {
-  let detectedMrzTop = mrz
-    ? mrz.format === 'TD1'
-      ? 0.59
-      : 0.7
-    : 0.94;
+  let observedMrzTop: number | null = null;
 
   for (const b of boxes) {
     const norm = b.text.replace(/\s+/g, '').toUpperCase();
     const yRatio = b.y0 / workH;
     const wRatio = (b.x1 - b.x0) / workW;
     if (yRatio >= 0.52 && wRatio >= 0.42 && norm.length >= 20 && norm.includes('<')) {
-      detectedMrzTop = Math.min(detectedMrzTop, Math.max(0.5, yRatio - 0.018));
+      const candTop = Math.max(0.5, yRatio - 0.018);
+      observedMrzTop = observedMrzTop === null ? candTop : Math.min(observedMrzTop, candTop);
     }
   }
-  return detectedMrzTop;
+
+  if (observedMrzTop !== null) {
+    return observedMrzTop;
+  }
+
+  if (mrz) {
+    return mrz.format === 'TD1' ? 0.62 : 0.74;
+  }
+  return 0.94;
 }
 
 function estimatePaperColor(
   rgba: Uint8ClampedArray,
   w: number,
   h: number
-): { r: number; g: number; b: number; luma: number } {
+): { r: number; g: number; b: number; luma: number; chroma: number } {
   const rs: number[] = [];
   const gs: number[] = [];
   const bs: number[] = [];
+  const chromas: number[] = [];
   const x0 = Math.floor(w * 0.06);
   const x1 = Math.ceil(w * 0.94);
   const y0 = Math.floor(h * 0.08);
@@ -174,25 +181,90 @@ function estimatePaperColor(
       const g = rgba[i + 1];
       const b = rgba[i + 2];
       const luma = 0.299 * r + 0.587 * g + 0.114 * b;
-      if (luma >= 175) {
+      if (luma >= 165) {
         rs.push(r);
         gs.push(g);
         bs.push(b);
+        chromas.push(Math.max(r, g, b) - Math.min(r, g, b));
       }
     }
   }
 
   if (rs.length < 20) {
-    return { r: 242, g: 242, b: 242, luma: 242 };
+    return { r: 242, g: 242, b: 242, luma: 242, chroma: 8 };
   }
   rs.sort((a, b) => a - b);
   gs.sort((a, b) => a - b);
   bs.sort((a, b) => a - b);
+  chromas.sort((a, b) => a - b);
   const mid = Math.floor(rs.length * 0.65);
   const r = rs[mid];
   const g = gs[mid];
   const b = bs[mid];
-  return { r, g, b, luma: 0.299 * r + 0.587 * g + 0.114 * b };
+  return {
+    r,
+    g,
+    b,
+    luma: 0.299 * r + 0.587 * g + 0.114 * b,
+    chroma: chromas[mid],
+  };
+}
+
+function estimateZonePaperColor(
+  rgba: Uint8ClampedArray,
+  w: number,
+  textMask: Uint8Array,
+  zx0: number,
+  zy0: number,
+  zw: number,
+  zh: number,
+  fallback: { r: number; g: number; b: number; luma: number; chroma: number }
+): { r: number; g: number; b: number; luma: number; chroma: number } {
+  const rs: number[] = [];
+  const gs: number[] = [];
+  const bs: number[] = [];
+  const chromas: number[] = [];
+
+  for (let ly = 0; ly < zh; ly += 2) {
+    const gy = zy0 + ly;
+    for (let lx = 0; lx < zw; lx += 2) {
+      const gIdx = gy * w + (zx0 + lx);
+      if (textMask[gIdx]) continue;
+      const i = gIdx * 4;
+      const r = rgba[i];
+      const g = rgba[i + 1];
+      const b = rgba[i + 2];
+      const luma = 0.299 * r + 0.587 * g + 0.114 * b;
+      if (luma >= 135) {
+        rs.push(r);
+        gs.push(g);
+        bs.push(b);
+        chromas.push(Math.max(r, g, b) - Math.min(r, g, b));
+      }
+    }
+  }
+
+  if (rs.length < 30) {
+    return fallback;
+  }
+
+  rs.sort((a, b) => a - b);
+  gs.sort((a, b) => a - b);
+  bs.sort((a, b) => a - b);
+  chromas.sort((a, b) => a - b);
+
+  // 72nd percentile inside the zone represents the local security-tinted background paper
+  const idx = Math.floor(rs.length * 0.72);
+  const r = rs[idx];
+  const g = gs[idx];
+  const b = bs[idx];
+  return {
+    r,
+    g,
+    b,
+    luma: 0.299 * r + 0.587 * g + 0.114 * b,
+    chroma: chromas[idx],
+  };
 }
 
 interface PortraitCandidate {
@@ -201,69 +273,23 @@ interface PortraitCandidate {
   method: 'pixel_contour';
 }
 
-function findPortraitInZone(
+function scorePortraitComponents(
   rgba: Uint8ClampedArray,
   w: number,
   h: number,
   textMask: Uint8Array,
-  paper: { r: number; g: number; b: number; luma: number },
-  zoneX0Ratio: number,
-  zoneX1Ratio: number,
-  zoneY0Ratio: number,
-  zoneY1Ratio: number,
+  zoneBg: { r: number; g: number; b: number; luma: number; chroma: number },
+  core: Uint8Array,
+  soft: Uint8Array,
+  binaryMask: Uint8Array,
+  zx0: number,
+  zy0: number,
+  zx1: number,
+  zy1: number,
+  zw: number,
+  zh: number,
   sidePriorityBonus: number
 ): PortraitCandidate | null {
-  const zx0 = Math.max(0, Math.floor(zoneX0Ratio * w));
-  const zx1 = Math.min(w - 1, Math.ceil(zoneX1Ratio * w));
-  const zy0 = Math.max(0, Math.floor(zoneY0Ratio * h));
-  const zy1 = Math.min(h - 1, Math.ceil(zoneY1Ratio * h));
-  const zw = zx1 - zx0 + 1;
-  const zh = zy1 - zy0 + 1;
-  if (zw < 28 || zh < 36) return null;
-
-  const core = new Uint8Array(zw * zh);
-  const soft = new Uint8Array(zw * zh);
-
-  for (let ly = 0; ly < zh; ly++) {
-    const gy = zy0 + ly;
-    for (let lx = 0; lx < zw; lx++) {
-      const gx = zx0 + lx;
-      const gIdx = gy * w + gx;
-      if (textMask[gIdx]) continue;
-      const pIdx = gIdx * 4;
-      const r = rgba[pIdx];
-      const g = rgba[pIdx + 1];
-      const b = rgba[pIdx + 2];
-      const luma = 0.299 * r + 0.587 * g + 0.114 * b;
-      const dist = Math.abs(r - paper.r) + Math.abs(g - paper.g) + Math.abs(b - paper.b);
-      const chroma = Math.max(r, g, b) - Math.min(r, g, b);
-      const lumaDiff = Math.abs(luma - paper.luma);
-
-      if (dist > 64 || lumaDiff > 24 || chroma > 26) {
-        core[ly * zw + lx] = 1;
-        soft[ly * zw + lx] = 1;
-      } else if (dist > 36 || lumaDiff > 14 || chroma > 16) {
-        soft[ly * zw + lx] = 1;
-      }
-    }
-  }
-
-  const closed = new Uint8Array(zw * zh);
-  for (let y = 0; y < zh; y++) {
-    for (let x = 0; x < zw; x++) {
-      if (!core[y * zw + x]) continue;
-      for (let dy = -2; dy <= 2; dy++) {
-        const ny = y + dy;
-        if (ny < 0 || ny >= zh) continue;
-        for (let dx = -2; dx <= 2; dx++) {
-          const nx = x + dx;
-          if (nx < 0 || nx >= zw) continue;
-          closed[ny * zw + nx] = 1;
-        }
-      }
-    }
-  }
-
   const visited = new Uint8Array(zw * zh);
   const queue = new Int32Array(zw * zh);
   let bestCandidate: PortraitCandidate | null = null;
@@ -271,7 +297,7 @@ function findPortraitInZone(
   for (let startY = 0; startY < zh; startY++) {
     for (let startX = 0; startX < zw; startX++) {
       const startIdx = startY * zw + startX;
-      if (!closed[startIdx] || visited[startIdx]) continue;
+      if (!binaryMask[startIdx] || visited[startIdx]) continue;
 
       let head = 0;
       let tail = 0;
@@ -301,7 +327,7 @@ function findPortraitInZone(
           cy + 1 < zh ? idx + zw : -1,
         ];
         for (const nIdx of neighbors) {
-          if (nIdx >= 0 && closed[nIdx] && !visited[nIdx]) {
+          if (nIdx >= 0 && binaryMask[nIdx] && !visited[nIdx]) {
             visited[nIdx] = 1;
             queue[tail++] = nIdx;
           }
@@ -312,14 +338,14 @@ function findPortraitInZone(
       let expX1 = maxX;
       let expY0 = minY;
       let expY1 = maxY;
-      for (let step = 0; step < 18; step++) {
+      for (let step = 0; step < 14; step++) {
         let grew = false;
         if (expX0 > 0) {
           let hits = 0;
           for (let y = expY0; y <= expY1; y++) {
             if (soft[y * zw + (expX0 - 1)]) hits++;
           }
-          if (hits >= Math.max(4, (expY1 - expY0 + 1) * 0.45)) {
+          if (hits >= Math.max(4, (expY1 - expY0 + 1) * 0.48)) {
             expX0--;
             grew = true;
           }
@@ -329,7 +355,7 @@ function findPortraitInZone(
           for (let y = expY0; y <= expY1; y++) {
             if (soft[y * zw + (expX1 + 1)]) hits++;
           }
-          if (hits >= Math.max(4, (expY1 - expY0 + 1) * 0.45)) {
+          if (hits >= Math.max(4, (expY1 - expY0 + 1) * 0.48)) {
             expX1++;
             grew = true;
           }
@@ -339,7 +365,7 @@ function findPortraitInZone(
           for (let x = expX0; x <= expX1; x++) {
             if (soft[(expY0 - 1) * zw + x]) hits++;
           }
-          if (hits >= Math.max(4, (expX1 - expX0 + 1) * 0.45)) {
+          if (hits >= Math.max(4, (expX1 - expX0 + 1) * 0.48)) {
             expY0--;
             grew = true;
           }
@@ -349,7 +375,7 @@ function findPortraitInZone(
           for (let x = expX0; x <= expX1; x++) {
             if (soft[(expY1 + 1) * zw + x]) hits++;
           }
-          if (hits >= Math.max(4, (expX1 - expX0 + 1) * 0.45)) {
+          if (hits >= Math.max(4, (expX1 - expX0 + 1) * 0.48)) {
             expY1++;
             grew = true;
           }
@@ -363,18 +389,26 @@ function findPortraitInZone(
       const heightRatio = bh / h;
       const aspect = bw / Math.max(1, bh);
 
-      if (widthRatio < 0.095 || heightRatio < 0.16) continue;
+      if (widthRatio < 0.095 || widthRatio > 0.345 || heightRatio < 0.16 || heightRatio > 0.58) {
+        continue;
+      }
       if (aspect < 0.48 || aspect > 1.2) continue;
 
       const boxArea = bw * bh;
+      const areaRatio = boxArea / (w * h);
+      if (areaRatio > 0.21) continue;
+      if (bw >= zw * 0.92 && bh >= zh * 0.86) continue;
+
       const fillRatio = corePixels / Math.max(1, boxArea);
-      if (fillRatio < 0.24) continue;
+      if (fillRatio < 0.22) continue;
 
       let textCovered = 0;
       let sumLuma = 0;
       let sumSqLuma = 0;
       let highTransitionRows = 0;
       let sampledRows = 0;
+      let skinPixels = 0;
+      let neonPixels = 0;
 
       for (let ly = expY0; ly <= expY1; ly++) {
         const gy = zy0 + ly;
@@ -388,9 +422,24 @@ function findPortraitInZone(
           const gIdx = gy * w + gx;
           if (textMask[gIdx]) textCovered++;
           const pIdx = gIdx * 4;
-          const luma = 0.299 * rgba[pIdx] + 0.587 * rgba[pIdx + 1] + 0.114 * rgba[pIdx + 2];
+          const r = rgba[pIdx];
+          const g = rgba[pIdx + 1];
+          const b = rgba[pIdx + 2];
+          const luma = 0.299 * r + 0.587 * g + 0.114 * b;
+          const chroma = Math.max(r, g, b) - Math.min(r, g, b);
+          const distFromBg = Math.abs(r - zoneBg.r) + Math.abs(g - zoneBg.g) + Math.abs(b - zoneBg.b);
+
           sumLuma += luma;
           sumSqLuma += luma * luma;
+
+          if (distFromBg > 28) {
+            if (r > g && g >= b * 0.85 && r - b >= 14 && r - b <= 105 && r >= 80 && luma < 230) {
+              skinPixels++;
+            }
+            if (chroma > 110) {
+              neonPixels++;
+            }
+          }
 
           if (sampleRow) {
             const isDark = luma < 120;
@@ -408,12 +457,40 @@ function findPortraitInZone(
 
       const textOverlapRatio = textCovered / Math.max(1, boxArea);
       if (textOverlapRatio > 0.22) continue;
-      if (sampledRows > 0 && highTransitionRows / sampledRows > 0.32) continue;
+      if (sampledRows > 0 && highTransitionRows / sampledRows > 0.34) continue;
 
       const meanLuma = sumLuma / Math.max(1, boxArea);
       const variance = Math.max(0, sumSqLuma / Math.max(1, boxArea) - meanLuma * meanLuma);
       const stdDev = Math.sqrt(variance);
-      if (stdDev < 11) continue;
+      if (stdDev < 13) continue;
+
+      // Measure vertical bilateral symmetry (real portraits are strongly symmetric along X midpoint)
+      const symY0 = expY0 + Math.floor(bh * 0.12);
+      const symY1 = expY1 - Math.floor(bh * 0.14);
+      const halfW = Math.floor(bw * 0.38);
+      const midX = (expX0 + expX1) * 0.5;
+      let symDiffSum = 0;
+      let symPairs = 0;
+
+      for (let ly = symY0; ly <= symY1; ly += 2) {
+        const gy = zy0 + ly;
+        const rowOff = gy * w;
+        for (let dx = 2; dx <= halfW; dx += 2) {
+          const lxLeft = Math.max(expX0, Math.round(midX - dx));
+          const lxRight = Math.min(expX1, Math.round(midX + dx));
+          const iL = (rowOff + zx0 + lxLeft) * 4;
+          const iR = (rowOff + zx0 + lxRight) * 4;
+          const lL = 0.299 * rgba[iL] + 0.587 * rgba[iL + 1] + 0.114 * rgba[iL + 2];
+          const lR = 0.299 * rgba[iR] + 0.587 * rgba[iR + 1] + 0.114 * rgba[iR + 2];
+          symDiffSum += Math.abs(lL - lR);
+          symPairs++;
+        }
+      }
+      const meanSymDiff = symPairs > 0 ? symDiffSum / symPairs : stdDev * 1.5;
+      const symmetryScore = Math.max(0, Math.min(1, 1 - meanSymDiff / Math.max(36, stdDev * 2.2)));
+
+      const skinRatio = skinPixels / Math.max(1, boxArea);
+      const neonRatio = neonPixels / Math.max(1, boxArea);
 
       const gx0 = zx0 + expX0;
       const gy0 = zy0 + expY0;
@@ -443,9 +520,16 @@ function findPortraitInZone(
       const finalW = fx1 - fx0 + 1;
       const finalH = fy1 - fy0 + 1;
       const aspectPenalty = Math.abs(finalW / Math.max(1, finalH) - 0.77) * 45;
-      const areaScore = (boxArea / (w * h)) * 900;
+      const areaScore = Math.min(areaRatio, 0.13) * 580 - Math.max(0, areaRatio - 0.15) * 650;
       const score =
-        (areaScore + stdDev * 0.8 + fillRatio * 40 - aspectPenalty - textOverlapRatio * 120) *
+        (areaScore +
+          stdDev * 0.8 +
+          fillRatio * 40 +
+          symmetryScore * 65 +
+          Math.min(skinRatio * 45, 22) -
+          neonRatio * 160 -
+          aspectPenalty -
+          textOverlapRatio * 120) *
         sidePriorityBonus;
 
       if (!bestCandidate || score > bestCandidate.score) {
@@ -464,6 +548,128 @@ function findPortraitInZone(
   }
 
   return bestCandidate;
+}
+
+function findPortraitInZone(
+  rgba: Uint8ClampedArray,
+  w: number,
+  h: number,
+  textMask: Uint8Array,
+  paper: { r: number; g: number; b: number; luma: number; chroma: number },
+  zoneX0Ratio: number,
+  zoneX1Ratio: number,
+  zoneY0Ratio: number,
+  zoneY1Ratio: number,
+  sidePriorityBonus: number
+): PortraitCandidate | null {
+  const zx0 = Math.max(0, Math.floor(zoneX0Ratio * w));
+  const zx1 = Math.min(w - 1, Math.ceil(zoneX1Ratio * w));
+  const zy0 = Math.max(0, Math.floor(zoneY0Ratio * h));
+  const zy1 = Math.min(h - 1, Math.ceil(zoneY1Ratio * h));
+  const zw = zx1 - zx0 + 1;
+  const zh = zy1 - zy0 + 1;
+  if (zw < 28 || zh < 36) return null;
+
+  const zoneBg = estimateZonePaperColor(rgba, w, textMask, zx0, zy0, zw, zh, paper);
+  const core = new Uint8Array(zw * zh);
+  const soft = new Uint8Array(zw * zh);
+
+  for (let ly = 0; ly < zh; ly++) {
+    const gy = zy0 + ly;
+    for (let lx = 0; lx < zw; lx++) {
+      const gx = zx0 + lx;
+      const gIdx = gy * w + gx;
+      if (textMask[gIdx]) continue;
+      const pIdx = gIdx * 4;
+      const r = rgba[pIdx];
+      const g = rgba[pIdx + 1];
+      const b = rgba[pIdx + 2];
+      const luma = 0.299 * r + 0.587 * g + 0.114 * b;
+      const chroma = Math.max(r, g, b) - Math.min(r, g, b);
+      const dist = Math.abs(r - zoneBg.r) + Math.abs(g - zoneBg.g) + Math.abs(b - zoneBg.b);
+      const darker = zoneBg.luma - luma;
+      const lumaDiff = Math.abs(luma - zoneBg.luma);
+      const excessChroma = Math.max(0, chroma - zoneBg.chroma);
+
+      if (dist > 58 || darker > 24 || excessChroma > 24) {
+        core[ly * zw + lx] = 1;
+        soft[ly * zw + lx] = 1;
+      } else if (dist > 36 || lumaDiff > 15 || excessChroma > 16) {
+        soft[ly * zw + lx] = 1;
+      }
+    }
+  }
+
+  // Try crisp un-dilated core components first so guilloche borders never bridge to the portrait
+  const directCandidate = scorePortraitComponents(
+    rgba,
+    w,
+    h,
+    textMask,
+    zoneBg,
+    core,
+    soft,
+    core,
+    zx0,
+    zy0,
+    zx1,
+    zy1,
+    zw,
+    zh,
+    sidePriorityBonus
+  );
+  if (directCandidate) return directCandidate;
+
+  // Fallback: true 3x3 morphological closing (dilate -> erode) to reconnect low-contrast fragmented portraits
+  const dilated = new Uint8Array(zw * zh);
+  for (let y = 0; y < zh; y++) {
+    for (let x = 0; x < zw; x++) {
+      if (!core[y * zw + x]) continue;
+      for (let dy = -1; dy <= 1; dy++) {
+        const ny = y + dy;
+        if (ny < 0 || ny >= zh) continue;
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx = x + dx;
+          if (nx < 0 || nx >= zw) continue;
+          dilated[ny * zw + nx] = 1;
+        }
+      }
+    }
+  }
+  const closed = new Uint8Array(zw * zh);
+  for (let y = 0; y < zh; y++) {
+    for (let x = 0; x < zw; x++) {
+      let all = 1;
+      for (let dy = -1; dy <= 1 && all; dy++) {
+        const ny = y + dy;
+        for (let dx = -1; dx <= 1 && all; dx++) {
+          const nx = x + dx;
+          if (ny < 0 || ny >= zh || nx < 0 || nx >= zw || !dilated[ny * zw + nx]) {
+            all = 0;
+          }
+        }
+      }
+      closed[y * zw + x] = all;
+    }
+  }
+
+  return scorePortraitComponents(
+    rgba,
+    w,
+    h,
+    textMask,
+    zoneBg,
+    core,
+    soft,
+    closed,
+    zx0,
+    zy0,
+    zx1,
+    zy1,
+    zw,
+    zh,
+    sidePriorityBonus
+  );
 }
 
 /**
@@ -512,6 +718,121 @@ export function detectPortraitBoundsFromRgba(
   return { bbox: winner.bbox, method: winner.method };
 }
 
+function findInkClusterInBinaryMap(
+  ink: Uint8Array,
+  bw: number,
+  bh: number,
+  bx0: number,
+  by0: number,
+  bx1: number,
+  by1: number,
+  w: number,
+  h: number,
+  minAspect: number
+): { bbox: NormalizedRect; score: number } | null {
+  const bridged = new Uint8Array(bw * bh);
+  for (let ly = 0; ly < bh; ly++) {
+    for (let lx = 0; lx < bw; lx++) {
+      if (!ink[ly * bw + lx]) continue;
+      for (let dy = -2; dy <= 2; dy++) {
+        const ny = ly + dy;
+        if (ny < 0 || ny >= bh) continue;
+        for (let dx = -4; dx <= 4; dx++) {
+          const nx = lx + dx;
+          if (nx < 0 || nx >= bw) continue;
+          bridged[ny * bw + nx] = 1;
+        }
+      }
+    }
+  }
+
+  const visited = new Uint8Array(bw * bh);
+  const queue = new Int32Array(bw * bh);
+  let best: { bbox: NormalizedRect; score: number } | null = null;
+
+  for (let sy = 0; sy < bh; sy++) {
+    for (let sx = 0; sx < bw; sx++) {
+      const start = sy * bw + sx;
+      if (!bridged[start] || visited[start]) continue;
+
+      let head = 0;
+      let tail = 0;
+      queue[tail++] = start;
+      visited[start] = 1;
+
+      let minX = bw;
+      let maxX = -1;
+      let minY = bh;
+      let maxY = -1;
+      let inkCount = 0;
+
+      while (head < tail) {
+        const idx = queue[head++];
+        const cx = idx % bw;
+        const cy = (idx - cx) / bw;
+        if (ink[idx]) {
+          inkCount++;
+          if (cx < minX) minX = cx;
+          if (cx > maxX) maxX = cx;
+          if (cy < minY) minY = cy;
+          if (cy > maxY) maxY = cy;
+        }
+
+        const nbs = [
+          cx > 0 ? idx - 1 : -1,
+          cx + 1 < bw ? idx + 1 : -1,
+          cy > 0 ? idx - bw : -1,
+          cy + 1 < bh ? idx + bw : -1,
+        ];
+        for (const n of nbs) {
+          if (n >= 0 && bridged[n] && !visited[n]) {
+            visited[n] = 1;
+            queue[tail++] = n;
+          }
+        }
+      }
+
+      if (inkCount < 16 || maxX <= minX || maxY <= minY) continue;
+      const sigW = maxX - minX + 1;
+      const sigH = maxY - minY + 1;
+      const wRatio = sigW / w;
+      const hRatio = sigH / h;
+      const aspect = sigW / sigH;
+      const fillDensity = inkCount / (sigW * sigH);
+
+      if (wRatio < 0.055 || wRatio > 0.36 || sigH < 5 || hRatio > 0.135) continue;
+      if (aspect < minAspect || aspect > 8.5) continue;
+      if (fillDensity < 0.03 || fillDensity > 0.45) continue;
+
+      const padX = Math.max(4, Math.round(sigW * 0.06));
+      const padY = Math.max(3, Math.round(sigH * 0.14));
+      const gx0 = Math.max(bx0, bx0 + minX - padX);
+      const gy0 = Math.max(by0, by0 + minY - padY);
+      const gx1 = Math.min(bx1, bx0 + maxX + padX);
+      const gy1 = Math.min(by1, by0 + maxY + padY);
+
+      const score =
+        inkCount * 0.5 +
+        (aspect >= 1.6 && aspect <= 5.5 ? 25 : 5) -
+        Math.abs(fillDensity - 0.16) * 40;
+
+      if (!best || score > best.score) {
+        best = {
+          bbox: {
+            x: clamp01(gx0 / w),
+            y: clamp01(gy0 / h),
+            width: clamp01((gx1 - gx0 + 1) / w),
+            height: clamp01((gy1 - gy0 + 1) / h),
+          },
+          score,
+        };
+      }
+    }
+  }
+
+  return best;
+}
+
 function findInkBoundingBoxInSearchRect(
   rgba: Uint8ClampedArray,
   w: number,
@@ -523,11 +844,13 @@ function findInkBoundingBoxInSearchRect(
   sx1: number,
   sy1: number,
   darkDeltaThreshold: number,
-  minAspect: number
-): NormalizedRect | null {
-  const bx0 = Math.max(1, Math.floor(sx0));
+  minAspect: number,
+  preferClusterMode = false
+): { bbox: NormalizedRect; score: number } | null {
+  const edgeMarginX = Math.max(2, Math.round(w * 0.02));
+  const bx0 = Math.max(edgeMarginX, Math.floor(sx0));
   const by0 = Math.max(1, Math.floor(sy0));
-  const bx1 = Math.min(w - 2, Math.ceil(sx1));
+  const bx1 = Math.min(w - edgeMarginX - 1, Math.ceil(sx1));
   const by1 = Math.min(h - 2, Math.ceil(sy1));
   const bw = bx1 - bx0 + 1;
   const bh = by1 - by0 + 1;
@@ -571,6 +894,42 @@ function findInkBoundingBoxInSearchRect(
     }
   }
 
+  // Suppress continuous horizontal separator rules / printed signature baselines (<=3 rows tall, >=68% width)
+  const isRuleRow = new Uint8Array(bh);
+  for (let ly = 0; ly < bh; ly++) {
+    let rowSum = 0;
+    let maxRun = 0;
+    let curRun = 0;
+    const off = ly * bw;
+    for (let lx = 0; lx < bw; lx++) {
+      if (ink[off + lx]) {
+        rowSum++;
+        curRun++;
+        if (curRun > maxRun) maxRun = curRun;
+      } else {
+        curRun = 0;
+      }
+    }
+    if (rowSum >= Math.max(12, Math.floor(bw * 0.7)) && maxRun >= Math.floor(bw * 0.6)) {
+      isRuleRow[ly] = 1;
+    }
+  }
+
+  for (let ly = 0; ly < bh; ly++) {
+    if (!isRuleRow[ly]) continue;
+    let runEnd = ly;
+    while (runEnd + 1 < bh && isRuleRow[runEnd + 1]) runEnd++;
+    const runHeight = runEnd - ly + 1;
+    if (runHeight <= 3) {
+      for (let ry = ly; ry <= runEnd; ry++) {
+        ink.fill(0, ry * bw, (ry + 1) * bw);
+      }
+    }
+    ly = runEnd;
+  }
+
+  // Denoise isolated single pixels in-place
+  const cleanInk = new Uint8Array(bw * bh);
   let minX = bw;
   let maxX = -1;
   let minY = bh;
@@ -591,6 +950,7 @@ function findInkBoundingBoxInSearchRect(
         }
       }
       if (neighbors === 0) continue;
+      cleanInk[ly * bw + lx] = 1;
       inkCount++;
       if (lx < minX) minX = lx;
       if (lx > maxX) maxX = lx;
@@ -603,6 +963,10 @@ function findInkBoundingBoxInSearchRect(
 
   const sigW = maxX - minX + 1;
   const sigH = maxY - minY + 1;
+  if (preferClusterMode || sigW > w * 0.34 || sigH > h * 0.14) {
+    return findInkClusterInBinaryMap(cleanInk, bw, bh, bx0, by0, bx1, by1, w, h, minAspect);
+  }
+
   const fillDensity = inkCount / (sigW * sigH);
   const aspect = sigW / sigH;
 
@@ -618,17 +982,20 @@ function findInkBoundingBoxInSearchRect(
   const gy1 = Math.min(by1, by0 + maxY + padY);
 
   return {
-    x: clamp01(gx0 / w),
-    y: clamp01(gy0 / h),
-    width: clamp01((gx1 - gx0 + 1) / w),
-    height: clamp01((gy1 - gy0 + 1) / h),
+    bbox: {
+      x: clamp01(gx0 / w),
+      y: clamp01(gy0 / h),
+      width: clamp01((gx1 - gx0 + 1) / w),
+      height: clamp01((gy1 - gy0 + 1) / h),
+    },
+    score: inkCount,
   };
 }
 
 /**
  * Pure RGBA buffer signature region detector.
- * Prioritizes VIZ signature labels (e.g., "Holder's signature", "Firma del titular",
- * "Unterschrift") and falls back to cursive ink-cluster detection above the MRZ zone.
+ * Prioritizes VIZ signature labels (e.g., "Holder's signature", "Vlastoručni potpis",
+ * "Firma del titular", "Unterschrift") and falls back to cursive ink-cluster detection above the MRZ zone.
  */
 export function detectSignatureBoundsFromRgba(
   rgba: Uint8ClampedArray,
@@ -676,11 +1043,11 @@ export function detectSignatureBoundsFromRgba(
         belowY0,
         belowX1,
         belowY1,
-        38,
+        36,
         1.25
       );
       if (foundBelow) {
-        return { bbox: foundBelow, method: 'viz_label' };
+        return { bbox: foundBelow.bbox, method: 'viz_label' };
       }
     }
 
@@ -699,36 +1066,47 @@ export function detectSignatureBoundsFromRgba(
         rightY0,
         rightX1,
         rightY1,
-        38,
+        36,
         1.25
       );
       if (foundRight) {
-        return { bbox: foundRight, method: 'viz_label' };
+        return { bbox: foundRight.bbox, method: 'viz_label' };
       }
     }
   }
 
-  const heuristicX0 = Math.round(w * 0.32);
-  const heuristicX1 = Math.round(w * 0.78);
-  const heuristicY0 = Math.round(h * (options.mrz ? 0.53 : 0.64));
+  const heuristicY0 = Math.round(h * (options.mrz ? 0.53 : 0.62));
   const heuristicY1 = Math.min(Math.round(h * 0.88), maxAllowedY);
 
   if (heuristicY1 - heuristicY0 >= 12) {
-    const foundHeuristic = findInkBoundingBoxInSearchRect(
-      rgba,
-      w,
-      h,
-      textMask,
-      options.portraitRect ?? null,
-      heuristicX0,
-      heuristicY0,
-      heuristicX1,
-      heuristicY1,
-      54,
-      1.85
-    );
-    if (foundHeuristic && foundHeuristic.height * h >= 7 && foundHeuristic.width >= 0.09) {
-      return { bbox: foundHeuristic, method: 'layout_heuristic' };
+    const regions = [
+      { x0: Math.round(w * 0.30), x1: Math.round(w * 0.78) },
+      { x0: Math.round(w * 0.56), x1: Math.round(w * 0.95) },
+    ];
+    let bestHeuristic: { bbox: NormalizedRect; score: number } | null = null;
+    for (const reg of regions) {
+      const match = findInkBoundingBoxInSearchRect(
+        rgba,
+        w,
+        h,
+        textMask,
+        options.portraitRect ?? null,
+        reg.x0,
+        heuristicY0,
+        reg.x1,
+        heuristicY1,
+        52,
+        1.65,
+        true
+      );
+      if (match && match.bbox.height * h >= 7 && match.bbox.width >= 0.08) {
+        if (!bestHeuristic || match.score > bestHeuristic.score) {
+          bestHeuristic = match;
+        }
+      }
+    }
+    if (bestHeuristic) {
+      return { bbox: bestHeuristic.bbox, method: 'layout_heuristic' };
     }
   }
 

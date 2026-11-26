@@ -190,14 +190,15 @@ const LABEL_RULES: LabelRule[] = [
     field: 'surname',
     patterns: [
       /\b(?:primer\s*apellido|segundo\s*apellido|1er\.?\s*apellido|2[oº]\.?\s*apellido)\b/i,
-      /\b(?:surname|sumarre|sumame|last\s*name|family\s*name|nom(?:\s*de\s*famille)?|familienname|nachname|apell?i?dos?|cognome|nazwisko|achternaam|geslachtsnaam|pavard[eė]|p[rř][ií]jmen[ií]|vezet[eé]kn[eé]v|efternamn|etternavn)\b/i,
+      /\b(?:prezime|prazim[eo]|surname|sumarre|sumame|sumam[ao]|last\s*name|family\s*name|familienname|nachname|apell?i?dos?|cognome|nazwisko|achternaam|geslachtsnaam|pavard[eė]|p[rř][ií]jmen[ií]|vezet[eé]kn[eé]v|efternamn|etternavn)\b/i,
+      /(?<![A-Za-z\u00C0-\u024F])nom(?:\s*de\s*famille)?(?![A-Za-z\u00C0-\u024F])/i,
       /^(?:1[.)]?\s*)?(?:surname|nom|name)\b/i,
     ],
   },
   {
     field: 'givenNames',
     patterns: [
-      /\b(?:given\s*names?|first\s*names?|forenames?|pr[eé]noms?|vornamen?|vorname|nombres?|nome(?:\s*pr[oó]prio)?|imiona|voornamen|vardai|jm[eé]n[ao]?|ut[oó]n[eé]v|f[oö]rnamn|fornavn)\b/i,
+      /\b(?:ime\s*[\/|]\s*(?:given|pr[eé])|im[ea]\b[^:\n]{0,20}\b(?:pr[eéi]n[eo]m|pri[eo]r|given)|given\s*names?|first\s*names?|forenames?|pr[eé]noms?|vornamen?|vorname|nombres?|nome(?:\s*pr[oó]prio)?|imiona|voornamen|vardai|jm[eé]n[ao]?|ut[oó]n[eé]v|f[oö]rnamn|fornavn)\b/i,
       /^(?:2[.)]?\s*)?(?:given\s*names?|first\s*name)\b/i,
     ],
   },
@@ -210,39 +211,39 @@ const LABEL_RULES: LabelRule[] = [
   {
     field: 'documentNumber',
     patterns: [
-      /\b(?:passport\s*no\.?|pasaporte\s*n[°o]?|passeport\s*n[°o]?|pass-?nr\.?|document\s*(?:no\.?|number|id)|card\s*no\.?|id\s*number|dl\s*no\.?|licen[cs]e\s*(?:no\.?|number)|no\.?\s*du\s*passeport|reisepass\s*nr|n[uú]mero\s*(?:del\s*)?documento|paso\s*nr|č[ií]slo\s*pasu)\b/i,
+      /\b(?:br\.?\s*putovnice|passport\s*no\.?|pasaporte\s*n[°o]?|passeport\s*n[°o]?|pass-?nr\.?|document\s*(?:no\.?|number|id)|card\s*no\.?|id\s*number|dl\s*no\.?|licen[cs]e\s*(?:no\.?|number)|no\.?\s*du\s*passeport|reisepass\s*nr|n[uú]mero\s*(?:del\s*)?documento|paso\s*nr|č[ií]slo\s*pasu)\b/i,
       /^(?:4d|5)[.)]\s*/i,
     ],
   },
   {
     field: 'personalNumber',
     patterns: [
-      /\b(?:personal\s*(?:no\.?|number|id)|national\s*(?:id|no\.?|number)|identity\s*no\.?|id\.?\s*no\.?|pesel|ssn|social\s*security|tax\s*id|cnp|dni|nif|nie|bsn|fiscal\s*code|codice\s*fiscale|asmens\s*kodas|rodn[eé]\s*[cč][ií]slo|osobn[ií]\s*[cč][ií]slo)\b/i,
+      /\b(?:personal\s*(?:no\.?|number|id)|national\s*(?:id|no\.?|number)|identity\s*no\.?|id\.?\s*no\.?|oib|pesel|ssn|social\s*security|tax\s*id|cnp|dni|nif|nie|bsn|fiscal\s*code|codice\s*fiscale|asmens\s*kodas|rodn[eé]\s*[cč][ií]slo|osobn[ií]\s*[cč][ií]slo)\b/i,
     ],
   },
   {
     field: 'nationality',
     patterns: [
-      /\b(?:nationalit[yé]|naticnalt[yé]|staatsangeh[oö]rigkeit|nacionalidad|nacionalidade|nazionalit[aà]|obywatelstwo|citizenship|pilietyb[eė]|st[aá]tn[ií]\s*p[rř][ií]slu[sš]nost|nationaliteit)\b/i,
+      /\b(?:dr[zž]avl?j?\w*|draadjaratva|bredjanitva|nationalit[yé]|naticnalt[yé]|nalceall|staatsangeh[oö]rigkeit|nacionalidad|nacionalidade|nazionalit[aà]|obywatelstwo|citizenship|pilietyb[eė]|st[aá]tn[ií]\s*p[rř][ií]slu[sš]nost|nationaliteit)\b/i,
     ],
   },
   {
     field: 'issuingCountry',
     patterns: [
-      /\b(?:issuing\s*(?:state|country)|country\s*code|state\s*of\s*issue|pays\s*[eé]metteur|c[oó]digo|cdigo|code\s*\/\s*code|valstyb[eė]s\s*kodas|k[oó]d\s*st[aá]tu)\b/i,
+      /\b(?:oznaka\s*dr[zž]ave|issuing\s*(?:state|country)|country\s*code|state\s*of\s*issue|pays\s*[eé]metteur|c[oó]digo|cdigo|code\s*\/\s*code|valstyb[eė]s\s*kodas|k[oó]d\s*st[aá]tu)\b/i,
     ],
   },
   {
     field: 'dateOfBirth',
     patterns: [
-      /\b(?:date\s*of\s*birth|birth\s*date|dob|born\s*on|date\s*de\s*naissance|geburtsdatum|geburtstag|fecha\s*de\s*nacimiento|data\s*de\s*nascimento|data\s*di\s*nascita|data\s*urodzenia|geboortedatum|gimimo\s*data|datum\s*narozen[ií])\b/i,
+      /\b(?:da[ti]u?m\s*r[ao][dđ]enj?\w*|daim\s*ra[dđ]ena|date\s*of\s*birth|birth\s*date|dob|born\s*on|date\s*de\s*naissance|geburtsdatum|geburtstag|fecha\s*de\s*nacimiento|data\s*de\s*nascimento|data\s*di\s*nascita|data\s*urodzenia|geboortedatum|gimimo\s*data|datum\s*narozen[ií])\b/i,
       /^(?:3)[.)]\s*/i,
     ],
   },
   {
     field: 'placeOfBirth',
     patterns: [
-      /\b(?:place\s*of\s*b(?:ir|e)th|birth\s*place|birthplace|lieu\s*de\s*naissance|geburtsort|lugar\s*de\s*nacimiento|naturalidade|luogo\s*di\s*nascita|miejsce\s*urodzenia|geboorteplaats|gimimo\s*vieta|m[ií]sto\s*narozen[ií])\b/i,
+      /\b(?:mj?e[sš]t[ao]\s*ro[dđ]enj\w*|pra[eo]s\s*of\s*b[il]{2,3}|n[ae]ssar?c[il]|place\s*of\s*b(?:ir|e)th|birth\s*place|birthplace|lieu\s*de\s*naissance|geburtsort|lugar\s*de\s*nacimiento|naturalidade|luogo\s*di\s*nascita|miejsce\s*urodzenia|geboorteplaats|gimimo\s*vieta|m[ií]sto\s*narozen[ií])\b/i,
     ],
   },
   {
@@ -254,25 +255,25 @@ const LABEL_RULES: LabelRule[] = [
   {
     field: 'dateOfIssue',
     patterns: [
-      /\b(?:date\s*of\s*issue|issue\s*date|issued(?:\s*on)?|iss|date\s*de\s*d[eé]livrance|ausstellungsdatum|fecha\s*de\s*expedici[oó]n|data\s*de\s*emiss[aã]o|rilasciato\s*il|data\s*wydania|datum\s*[\/|]\s*[do]?[ao]te|i[sš]davimo\s*data|datum\s*vyd[aá]n[ií]|afgiftedatum)\b/i,
+      /\b(?:datum\s*izdavanja|izdirvienj\w*|date\s*of\s*issue|issue\s*date|issued(?:\s*on)?(?!\s*by)|iss(?!\s*by)|date\s*de\s*d[eé]livrance|ausstellungsdatum|fecha\s*de\s*expedici[oó]n|data\s*de\s*emiss[aã]o|rilasciato\s*il|data\s*wydania|datum\s*[\/|]\s*[do]?[ao]te|i[sš]davimo\s*data|datum\s*vyd[aá]n[ií]|afgiftedatum)\b/i,
       /^(?:4a)[.)]\s*/i,
     ],
   },
   {
     field: 'dateOfExpiry',
     patterns: [
-      /\b(?:date\s*of\s*expir(?:y|ation)|expir(?:y|es|ation)(?:\s*date)?|valid\s*(?:until|thru|to)|exp|date\s*d['’]expiration|g[uü]ltig\s*bis|fecha\s*de\s*caducidad|data\s*de\s*validade|scadenza|data\s*wa[zż]no[sś]ci|galioja\s*iki|platnost\s*do|geldig\s*tot)\b/i,
+      /\b(?:(?:datum\s*)?isteka(?:\s*valj\w*)?|date\s*of\s*expir(?:y|ation)|expir(?:y|es|ation)(?:\s*date)?|valid\s*(?:until|thru|to)|exp|date\s*d['’]expiration|g[uü]ltig\s*bis|fecha\s*de\s*caducidad|data\s*de\s*validade|scadenza|data\s*wa[zż]no[sś]ci|galioja\s*iki|platnost\s*do|geldig\s*tot)\b/i,
       /^(?:4b)[.)]\s*/i,
     ],
   },
   {
     field: 'sex',
-    patterns: [/\b(?:sex|gender|sexe|geschlecht|sexo|sesso|p[lł]e[cć]|lytis|pohlav[ií]|geslacht)\b/i],
+    patterns: [/\b(?:spol|sp[ao]ll?\s*[!/|]?\s*sa[sx]|sex|gender|sexe|geschlecht|sexo|sesso|p[lł]e[cć]|lytis|pohlav[ií]|geslacht)\b/i],
   },
   {
     field: 'issuingAuthority',
     patterns: [
-      /\b(?:authorit(?:y|ies)|issuing\s*(?:authority|office|agency)|autorit[eéa]|beh[oö]rde|behdrde|autoridad|autoridade|wydany\s*przez|organ\s*wydaj[aą]cy|equipo|i[sš]dav[eė]|vydal)\b/i,
+      /\b(?:izdan[ao]\s*(?:od\w*|by)|issued\s*by|d[eé]livr[eé]\s*par|authorit(?:y|ies)|issuing\s*(?:authority|office|agency)|autorit[eéa]|beh[oö]rde|behdrde|autoridad|autoridade|wydany\s*przez|organ\s*wydaj[aą]cy|equipo|i[sš]dav[eė]|vydal)\b/i,
       /^(?:4c|9)[.)]\s*/i,
     ],
   },
@@ -316,32 +317,39 @@ const LABEL_RULES: LabelRule[] = [
 
 // Secondary non-target label headers that must be skipped and terminate column collection
 const STOP_LABEL_PATTERNS: RegExp[] = [
-  /\b(?:doktorgrad|doctoral\s*degr|degn?\s*ree|grade\s*de\s*docteur|ordens|rdens|oder\s*k[uü]nst|k[uü]nstlername|kinermamo|kinlenamo|kintlemamo|lername|no[em]\s+de\s+religion|rotgious|otgious|religious\s*name|stage\s*or\s*pen|nom\s*d['’]?artiste|pseudonyn|pseudonym|signature|unterschrift|firma\s*del\s*titular|holder['’]?s\s*signature|para[sš]as|podpis)\b/i,
+  /\b(?:doktorgrad|doctoral\s*degr|degn?\s*ree|grade\s*de\s*docteur|ordens|rdens|oder\s*k[uü]nst|k[uü]nstlername|kinermamo|kinlenamo|kintlemamo|lername|no[em]\s+de\s+religion|rotgious|otgious|religious\s*name|stage\s*or\s*pen|nom\s*d['’]?artiste|pseudonyn|pseudonym|signature|unterschrift|firma\s*del\s*titular|holder['’]?s\s*sig(?:nature)?|(?:vlastoru[cč]n[io]\s*|mastoru[cč]n[io]\s*)?p[ao]tp[il]{1,2}[sz]?|para[sš]as|podpis)\b/i,
 ];
 
 function stripMatchedLabel(line: string, patterns: RegExp[]): string {
   const colonIdx = line.indexOf(':');
-  if (colonIdx !== -1 && colonIdx < 40) {
+  if (colonIdx !== -1 && colonIdx < 40 && !/[(\[\/|!]/.test(line.slice(0, colonIdx))) {
     return line.slice(colonIdx + 1).trim();
   }
 
-  let stripped = line;
+  // Without a colon, printed VIZ labels always precede values; never return leading noise before a trailing keyword
+  let maxEnd = 0;
   for (const pattern of patterns) {
     const globalPat = new RegExp(
       pattern.source,
       pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`
     );
-    stripped = stripped.replace(globalPat, '');
+    let m: RegExpExecArray | null;
+    while ((m = globalPat.exec(line)) !== null) {
+      const end = m.index + m[0].length;
+      if (end > maxEnd) maxEnd = end;
+      if (m[0].length === 0) globalPat.lastIndex++;
+    }
   }
 
-  return stripped
-    .replace(/^[\s/:|.\-–—]+/, '')
+  const tail = maxEnd > 0 ? line.slice(maxEnd) : line;
+  return tail
+    .replace(/^[\s/:|.\-–—!]+/, '')
     .replace(/^(?:[\/|][A-Za-z\u00C0-\u024F\s]+)+[:\-]?\s*/, '')
     .trim();
 }
 
 function isMultilingualHeaderLine(line: string, matchedRule: LabelRule): boolean {
-  if (line.includes(':')) return false;
+  if (line.includes(':') && !/[(\[\/|!]/.test(line.slice(0, line.indexOf(':')))) return false;
   if (/[\/|]/.test(line) && !/\d{1,2}\/\d{1,2}/.test(line)) {
     return true;
   }
@@ -354,6 +362,9 @@ function isMultilingualHeaderLine(line: string, matchedRule: LabelRule): boolean
       matchedRule.field === 'dateOfExpiry') &&
     !/\d/.test(remainder)
   ) {
+    return true;
+  }
+  if (matchedRule.field === 'sex' && !parseSexValue(remainder)) {
     return true;
   }
   return false;
@@ -399,14 +410,14 @@ function cleanVisualValue(val: string, preserveTrailingDigit = false): string {
 function detectDocumentTypeHint(text: string): DocumentType | null {
   const upper = text.toUpperCase();
   if (
-    /\b(?:PASSPORT|PASSEPORT|PASAPORTE|REISEPASS|PASSAPORTO|PASZPORT|PASAS|CESTOVN[IÍ]\s*PAS)\b/.test(
+    /\b(?:PASSPORT|PASSEPORT|PASAPORTE|REISEPASS|PASSAPORTO|PASZPORT|PASAS|CESTOVN[IÍ]\s*PAS|PUTOVNICA)\b/.test(
       upper
     )
   ) {
     return 'passport';
   }
   if (
-    /\b(?:DRIVER(?:'S)?\s*LICEN[CS]E|DRIVING\s*LICEN[CS]E|PERMIS\s*DE\s*CONDUIRE|F[UÜ]HRERSCHEIN|PRAWO\s*JAZDY|RIJBEWIJS|CARN[EÉ]\s*DE\s*CONDUCIR)\b/.test(
+    /\b(?:DRIVER(?:'S)?\s*LICEN[CS]E|DRIVING\s*LICEN[CS]E|PERMIS\s*DE\s*CONDUIRE|F[UÜ]HRERSCHEIN|PRAWO\s*JAZDY|RIJBEWIJS|CARN[EÉ]\s*DE\s*CONDUCIR|VOZA[CČ]KA\s*DOZVOLA)\b/.test(
       upper
     )
   ) {
@@ -421,7 +432,7 @@ function detectDocumentTypeHint(text: string): DocumentType | null {
     return 'visa';
   }
   if (
-    /\b(?:IDENTITY\s*CARD|ID\s*CARD|NATIONAL\s*ID|CARTE\s*NATIONALE|PERSONALAUSWEIS|ANSCHRIFT|AUGENFARBE|DOW[OÓ]D\s*OSOBISTY|CARTA\s*D'IDENTIT[AÀ]|DNI|ASMENS\s*TAPATYB[EĖ]S|OB[CČ]ANSK[YÝ]\s*PR[UŮ]KAZ|IDENTITEITSKAART|CART[AÃ]O\s*DE\s*CIDAD[AÃ]O)\b/.test(
+    /\b(?:IDENTITY\s*CARD|ID\s*CARD|NATIONAL\s*ID|CARTE\s*NATIONALE|PERSONALAUSWEIS|ANSCHRIFT|AUGENFARBE|DOW[OÓ]D\s*OSOBISTY|CARTA\s*D'IDENTIT[AÀ]|DNI|ASMENS\s*TAPATYB[EĖ]S|OB[CČ]ANSK[YÝ]\s*PR[UŮ]KAZ|IDENTITEITSKAART|CART[AÃ]O\s*DE\s*CIDAD[AÃ]O|OSOBNA\s*ISKAZNICA)\b/.test(
       upper
     )
   ) {
@@ -435,7 +446,7 @@ function parseSexValue(val: string): 'M' | 'F' | 'X' | null {
   if (/^(?:M|MALE|HOMME|M[AÄ]NNLICH|MASCULINO|M[EĘ][ZŻ]CZYZNA|MU[ZŽ]|VYR\.?)$/.test(upper)) {
     return 'M';
   }
-  if (/^(?:F|FEMALE|FEMME|WEIBLICH|FEMENINO|KOBIETA|[ZŽ]ENA|MOT\.?|V)$/.test(upper)) {
+  if (/^(?:F|FEMALE|FEMME|WEIBLICH|FEMENINO|KOBIETA|[ZŽ]ENA|MOT\.?|V|[ZŽ])$/.test(upper)) {
     return 'F';
   }
   if (/^(?:X|NON[- ]?BINARY|OTHER|DIVERS)$/.test(upper)) return 'X';
@@ -556,6 +567,14 @@ export function parseVizText(
               if (rule.field === 'surname') {
                 // Skip secondary birth-name markers like "[b] GABLER" or "» GABLER"
                 if (/^(?:\[b\]|[»*])/i.test(cand.text)) break;
+                // Stop if a mixed-case header line follows an all-caps surname
+                if (
+                  columnCandidates.length > 0 &&
+                  /^[A-Z\u00C0-\u024F\s-]+$/.test(columnCandidates[0]) &&
+                  /[a-z]{2,}/.test(cand.text)
+                ) {
+                  break;
+                }
                 if (lastCandBox !== null) {
                   const prevLineH = Math.max(14, lastCandBox.y1 - lastCandBox.y0);
                   if (cand.bbox.y0 - lastCandBox.y1 > prevLineH * 1.4) break;
@@ -594,6 +613,15 @@ export function parseVizText(
             ? ''
             : stripMatchedLabel(line, rule.patterns);
 
+          if (
+            inlineValue &&
+            rule.field === 'placeOfBirth' &&
+            !/[A-Z\u00C0-\u024F]{2,}/.test(inlineValue) &&
+            columnCandidates.length > 0
+          ) {
+            inlineValue = '';
+          }
+
           let value = inlineValue;
           let consumedOffset = 0;
 
@@ -613,12 +641,18 @@ export function parseVizText(
             rule.field === 'dateOfIssue' ||
             rule.field === 'dateOfExpiry'
           ) {
-            const iso = normalizeVisualDate(value);
+            let iso = normalizeVisualDate(value);
+            if (!iso && columnCandidates.length > 0) {
+              iso = normalizeVisualDate(columnCandidates[0]);
+            }
             if (iso && !data[rule.field]) {
               data[rule.field] = iso;
             }
           } else if (rule.field === 'sex') {
-            const parsedSex = parseSexValue(value);
+            let parsedSex = parseSexValue(value);
+            if (!parsedSex && columnCandidates.length > 0) {
+              parsedSex = parseSexValue(columnCandidates[0]);
+            }
             if (parsedSex && !data.sex) {
               data.sex = parsedSex;
             }
@@ -708,9 +742,21 @@ export function parseVizText(
       if (birthCandidate) data.dateOfBirth = birthCandidate;
     }
     if (!data.dateOfExpiry) {
-      const expiryCandidate = [...allDates]
+      let expiryCandidate = [...allDates]
         .reverse()
         .find((d) => parseInt(d.slice(0, 4), 10) >= currentYear - 2);
+      if (!expiryCandidate) {
+        const birthYear = data.dateOfBirth ? parseInt(data.dateOfBirth.slice(0, 4), 10) : null;
+        expiryCandidate = [...allDates]
+          .reverse()
+          .find(
+            (d) =>
+              d !== data.dateOfBirth &&
+              d !== data.dateOfIssue &&
+              (!data.dateOfIssue || d > data.dateOfIssue) &&
+              (birthYear === null || parseInt(d.slice(0, 4), 10) >= birthYear + 14)
+          );
+      }
       if (expiryCandidate && expiryCandidate !== data.dateOfBirth) {
         data.dateOfExpiry = expiryCandidate;
       }

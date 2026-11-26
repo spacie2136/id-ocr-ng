@@ -167,6 +167,11 @@ const VISUAL_COUNTRY_CUE_RULES: Array<{ countryCode: string; pattern: RegExp }> 
     pattern: /\b(?:SLOVENSK[AÁ]\s+REPUBLIKA|OB[CČ]IANSKY\s+PREUKAZ)\b/i,
   },
   {
+    countryCode: 'HRV',
+    pattern:
+      /\b(?:REPUBLIKA\s+HRVATSKA|HRVATSK[AOI]|PUTOVNICA|OSOBNA\s+ISKAZNICA|VOZA[CČ]KA\s+DOZVOLA|DR[ZŽ]AVLJANSTVO|MJESTO\s+RO[DĐ]ENJA|PREZIME)\b/i,
+  },
+  {
     countryCode: 'LTU',
     pattern:
       /\b(?:LIETUVOS\s+RESPUBLIKA|ASMENS\s+TAPATYB[EĖ]S|PILIETYB[EĖ]|PAVARD[EĖ]|GALIOJA\s+IKI)\b/i,

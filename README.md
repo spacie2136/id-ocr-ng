@@ -1,24 +1,29 @@
-# DocScan Browser OCR (`v0.0.7`)
+# DocScan Browser OCR (`v0.0.8`)
 
 Client-side browser OCR and 2D barcode identity parser for **passports, national ID cards, residence permits, visas, and US/Canadian/international driver licenses** — running 100% in the browser with WebAssembly (`tesseract.js`), off-thread `OffscreenCanvas` Web Workers, and PDF417 decoding (`BarcodeDetector` / `@zxing/library`) with zero document uploads to external servers.
 
 ## Features
 
+- **Accuracy-Hardened VIZ & MRZ Pipeline (`v0.0.8`)**:
+  - **Shadow-Resilient Illumination Flattening (`flattenShadowIlluminationBuffer`)**: Uses a 16×12 tile 88th-percentile background surface with 3×3 neighborhood smoothing (engaged automatically only when uneven lighting spread `>= 28`) so harsh shadows and finger/phone casts clear cleanly without washing out crisp flat scans.
+  - **Dynamic MRZ Band Localization (`detectDynamicMrzBand`)**: Automatically locates contiguous monospace MRZ ink rows in the lower half of the document to tighten both MRZ crops—preventing TD1 line-1 clipping while avoiding upper passport holograms.
+  - **Cross-Candidate MRZ Consensus Voting & Joint Check-Digit Solver (`synthesizeConsensusMrz`)**: Synthesizes weighted per-column character consensus across Pass 1 VIZ, Pass 2 OCR-B strip, symbol-repaired, and monospace grid candidates, paired with joint date calendar/check-digit & TD1/TD2/TD3 composite check-digit repair.
+  - **Bilateral Portrait Symmetry & Signature Rule Filtering**: Prefers bilaterally symmetric facial portraits while penalizing neon security holograms/stamps, and strips thin horizontal printed rules/underlines from cursive signature crops.
 - **Portrait & Signature Crop (Default)**: Automatically isolates and returns high-resolution cropped PNG data URLs and normalized bounding boxes for the holder's face portrait (`portraitDataUrl`, `portraitRegion`) and handwritten signature (`signatureDataUrl`, `signatureRegion`) from upright, perspective-corrected documents while masking out VIZ text lines and MRZ strips. Toggle independently via `extractPortrait` and `extractSignature` (both default `true`).
 - **Specimen Watermark Detection (Default)**: Flags sample, demo, void, or test documents across OCR text, MRZ, 2D barcodes, and diagonal colored watermark stamps (`SPECIMEN`, `MUSTER`, `MUSTERMANN`, `WZÓR`, `VZOR`, `MUESTRA`, `ÉCHANTILLON`, `VOID`, `SAMPLE`, `FACSIMILE`, `NOT VALID FOR TRAVEL`, and ICAO `UTO` Utopia issuer code). Performs a fast crimson/red stamp deskewing OCR probe only when red stamp ink is detected (`detectSpecimen: true` by default; returns structured `specimen: SpecimenDetectionResult`).
 - **Single-Side MRZ ↔ VIZ Cross-Validation**: Automatically cross-checks overlapping Machine Readable Zone and Visual Inspection Zone fields (`documentNumber`, `dateOfBirth`, `dateOfExpiry`, `sex`, `surname`, `givenNames`, `issuingCountry`) on single-side scans and exposes mismatches & OCR-confusable warnings in `result.crossValidation`. Supports diacritic normalization, German transliterations (`Ä/Ö/Ü/ß` ↔ `AE/OE/UE/SS`), and MRZ given-name truncation.
-- **OffscreenCanvas / Web Worker Preprocessing (Default)**: Offloads heavy pixel pipelines—2400px 4-corner perspective homography warping, 2200px image scaling/deskewing/trimming, contrast-stretched grayscale generation, dual 1800px flat-field MRZ strips, and 400px orientation sampling—off the main UI thread into a dedicated self-contained Blob Web Worker (`OffscreenCanvas` + transferable `ImageBitmap` / `ArrayBuffer`). Compatible out of the box with Vite, UMD, ESM, jsDelivr CDN, and standalone `src/scanner/` copies, with automatic transparent fallback to main-thread `HTMLCanvasElement` (`useWorkerPreprocessing: false` to disable; reports `result.workerPreprocessed`).
+- **OffscreenCanvas / Web Worker Preprocessing (Default)**: Offloads heavy pixel pipelines—2400px 4-corner perspective homography warping, 2200px image scaling/deskewing/trimming, shadow-flattened contrast normalization, dynamic MRZ band detection, and dual 1800px flat-field MRZ strips—off the main UI thread into a dedicated self-contained Blob Web Worker (`OffscreenCanvas` + transferable `ImageBitmap` / `ArrayBuffer`). Compatible out of the box with Vite, UMD, ESM, jsDelivr CDN, and standalone `src/scanner/` copies, with automatic transparent fallback to main-thread `HTMLCanvasElement` (`useWorkerPreprocessing: false` to disable; reports `result.workerPreprocessed`).
 - **`AbortSignal` Scan Cancellation**: Pass `signal: controller.signal` into `scanner.scan()`, `scanDocumentImage()`, `scanner.scanPair()`, or `scanDocumentPair()` to abort cleanly at any stage (decoding, perspective warp, quality gate, barcode scan, Tesseract OCR, media crop, or between sides). Immediately terminates active Tesseract & preprocessing workers without poisoning fallback state and rejects with `ScanAbortedError` (`name === 'AbortError'`, `isScanAbortedError(err)`).
 - **PDF417 / AAMVA 2D Barcode Decoding (Default)**: Automatically detects and decodes PDF417 barcodes on the back of US, Canadian, and international driver licenses & ID cards using hardware-accelerated `BarcodeDetector` when supported, backed by a multi-rotation / multi-crop pure-JS `@zxing/library` fallback. Parses **AAMVA CDS v01–v10+** payloads (`parseAamvaPayload()`), resolves 6-digit US/Canadian IIN issuing jurisdictions, handles `MMDDYYYY` vs. Canadian `YYYYMMDD` dates, and fuses deterministic barcode fields (`BARCODE` / `BARCODE+VIZ`) cleanly with front-side OCR in `scanPair()`. Disable anytime via `enableBarcodePass: false`.
 - **WYSIWYG Mobile Camera Auto-Capture & Image Quality Gate**: Real-time `<video>` stream watcher (`CameraAutoCapture` / `watchCameraAutoCapture`) with `computeVisibleVideoCrop()` / `captureRegion` so tall mobile portrait sensors (`object-cover`) crop strictly to the visible viewfinder rectangle instead of capturing large top/bottom backgrounds. Calibrated for handheld phones (`requiredStableFrames: 2`, `minSharpness: 22`, leaky motion tolerance) while checking focus sharpness, specular glare hotspots, lighting exposure, 4-corner framing, and hold stability.
 - **Multilingual VIZ Language Passes (`auto` Native Default)**: Automatically routes non-English documents (detected via MRZ issuing state/nationality or visual VIZ header cues) to a targeted native-script Tesseract VIZ pass (`eng+deu`, `eng+spa`, `eng+fra`, `eng+ces`, `eng+lit`, etc.) while keeping English documents at 0ms overhead. Restores native diacritics (`ÄÖÜß`, `Ñ`, `ÉÈÇ`, `ČĖŠŽ`) and enriches single-side MRZ names without manual setup. Supports switching to single-pass `vizLanguageMode: 'multilingual'` (`eng+deu+spa+fra`), `'standard'` (`eng` only), or forcing any language pack via `vizLanguages` / `vizLanguageMap`.
 - **Dedicated OCR-B MRZ Engine (Default)**: Uses an integer-quantized OCR-B traineddata model (`ocrb_int`, ~1.45 MB cached in IndexedDB) for the dedicated MRZ strip pass—yielding ~30% more valid ICAO check digits than `eng` across varied passport/ID specimens. Pass `mrzModel: 'standard'` anytime to switch MRZ recognition back to the standard language model (`eng`).
-- **ICAO 9303 MRZ Parsing**: Supports `TD1` (3×30 ID cards), `TD2` (2×36), `TD3` (2×44 passports), and `MRV-A` / `MRV-B` (visas) with Modulo-10 check-digit validation.
+- **ICAO 9303 MRZ Parsing**: Supports `TD1` (3×30 ID cards), `TD2` (2×36), `TD3` (2×44 passports), and `MRV-A` / `MRV-B` (visas) with Modulo-10 check-digit validation and joint DOB/expiry/composite recovery.
 - **Visual Inspection Zone (VIZ) Extraction**: Pan-European multilingual field extraction for names (including compound/double surnames), dates, residential addresses, place of birth, issuing authority, sex, height, eye color, and driver license categories.
 - **4-Corner Perspective Correction**: Pure-JS automatic document quadrilateral detection + 3×3 homography bilinear dewarping (tuned for both tight document scans and smaller tilted ID cards inside mobile camera photos, plus optional manual `corners` override).
 - **Two-Sided Document Merging**: `scanPair()` / `scanDocumentPair()` / `mergeDocumentSides()` combine front and back scans (even if swapped), fuse PDF417 AAMVA barcodes with front-side VIZ fields, propagate extracted portraits/signatures and specimen warnings, enrich diacritics, and validate cross-side consistency.
 - **Auto-Rotate & Deskew**: Pure-JS fine tilt estimation (`±45°`) + 4-way orientation detection (`0°`, `90°`, `180°`, `270°`) with upright OCR verification.
-- **Framework-Agnostic SDK (`src/scanner/`)**: Zero React or UI dependencies; ships with ready-compiled `latest` and version-pinned (`v0.0.7`) ESM & UMD browser bundles plus TypeScript `.d.ts` declarations in `public/lib/`.
+- **Framework-Agnostic SDK (`src/scanner/`)**: Zero React or UI dependencies; ships with ready-compiled `latest` and version-pinned (`v0.0.8`) ESM & UMD browser bundles plus TypeScript `.d.ts` declarations in `public/lib/`.
 
 See [ROADMAP.md](./ROADMAP.md) for shipped capabilities and upcoming enhancements.
 
@@ -26,7 +31,7 @@ See [ROADMAP.md](./ROADMAP.md) for shipped capabilities and upcoming enhancement
 
 ## Using jsDelivr Directly From GitHub (`latest` or Pinned Version)
 
-Once `public/lib/` is pushed to your public GitHub repository, remote websites can load either the **always-latest** bundle (`docscan-ocr.latest.*`) or a **version-pinned** bundle (`docscan-ocr.v0.0.7.*`) directly through jsDelivr.
+Once `public/lib/` is pushed to your public GitHub repository, remote websites can load either the **always-latest** bundle (`docscan-ocr.latest.*`) or a **version-pinned** bundle (`docscan-ocr.v0.0.8.*`) directly through jsDelivr.
 
 ### Option A: Classic `<script>` Tag (UMD Bundle)
 
@@ -108,7 +113,7 @@ Always load the latest build from your `main` branch:
 Or pin a specific Git tag/version for immutable production caching:
 
 ```html
-<script src="https://cdn.jsdelivr.net/gh/<USERNAME>/<REPO>@v0.0.7/public/lib/docscan-ocr.v0.0.7.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/<USERNAME>/<REPO>@v0.0.8/public/lib/docscan-ocr.v0.0.8.umd.js"></script>
 ```
 
 ### Option B: Native Browser ES Module (`<script type="module">`)
@@ -180,7 +185,7 @@ Or pin a specific Git tag/version for immutable production caching:
 npm install github:<your-username>/<your-repo>
 
 # Or pin a release tag / commit
-npm install github:<your-username>/<your-repo>#v0.0.7
+npm install github:<your-username>/<your-repo>#v0.0.8
 
 # Or install from a local clone on your machine
 npm install ../path/to/docscan-ocr
@@ -244,13 +249,13 @@ await scanner.terminate();
 
 ### 1. Portrait / Signature Cropping, Cross-Validation & Specimen Watermarks
 
-- **Portrait & Signature Cropping (`extractPortrait`, `extractSignature`, both default `true`)**: After 4-corner rectification and upright auto-rotation, `extractPortraitAndSignature()` scans standard front/data-page zones while masking out detected VIZ text boxes and MRZ rows. Portraits are isolated using border-aware background/edge segmentation and exported as crisp PNG data URLs (`portraitDataUrl`, `portraitRegion`). Signatures anchor onto localized labels (`Signature`, `Unterschrift`, `Firma del titular`, `Podpis`, etc.) or fall back to high-ink cursive stroke clusters above the MRZ (`signatureDataUrl`, `signatureRegion`).
+- **Portrait & Signature Cropping (`extractPortrait`, `extractSignature`, both default `true`)**: After 4-corner rectification and upright auto-rotation, `extractPortraitAndSignature()` scans standard front/data-page zones while masking out detected VIZ text boxes and MRZ rows. Portraits are isolated using bilateral vertical symmetry + border-aware contour segmentation while penalizing neon holograms (`portraitDataUrl`, `portraitRegion`). Signatures anchor onto localized labels (`Signature`, `Unterschrift`, `Firma del titular`, `Podpis`, etc.) or fall back to high-ink cursive stroke clusters above the MRZ while suppressing printed horizontal divider rules (`signatureDataUrl`, `signatureRegion`).
 - **Specimen Watermark Detection (`detectSpecimen`, default `true`)**: Inspects VIZ OCR text, MRZ names/document numbers, 2D barcode payloads, and optional diagonal/colored crimson stamp ink (`buildColoredWatermarkOcrCanvas()`) for multilingual sample indicators (`SPECIMEN`, `MUSTER`, `MUSTERMANN`, `WZÓR`, `VZOR`, `MUESTRA`, `ÉCHANTILLON`, `VOID`, `SAMPLE`, `FACSIMILE`, `NOT VALID FOR TRAVEL`, and ICAO `UTO` Utopia issuer codes). Check `result.specimen?.isSpecimen` (`confidence: 0..100`, `matchedIndicators`).
 - **Single-Side MRZ ↔ VIZ Cross-Validation**: On any document with both MRZ and VIZ content, `crossValidateMrzAndViz()` audits `documentNumber`, `dateOfBirth`, `dateOfExpiry`, `sex`, `surname`, `givenNames`, and `issuingCountry`—tolerating native diacritics (`ESPAÑOLA` ↔ `ESPANOLA`), German transliterations (`MÜLLER` ↔ `MUELLER`), and truncated MRZ given names while surfacing mismatches or OCR-confusable (`0`/`O`) warnings in `result.crossValidation`.
 
 ### 2. OffscreenCanvas Web Worker Preprocessing & `AbortSignal` Cancellation
 
-- **OffscreenCanvas Worker (`useWorkerPreprocessing`, default `true`)**: When the browser supports `Worker`, `OffscreenCanvas`, and `createImageBitmap` (all modern Chromium, Firefox, and Safari releases), `PreprocessWorkerClient` executes perspective homography warping, downscaled grayscale sampling, rotation/deskewing, contrast normalization, and dual flat-field MRZ PNG encoding inside an isolated self-contained Blob Web Worker with zero Vite-specific `?worker` imports. If running in an older browser or strict CSP (`worker-src` blocking `blob:`), it degrades seamlessly to main-thread `HTMLCanvasElement` without throwing. Check `result.workerPreprocessed` to verify off-thread execution or pass `useWorkerPreprocessing: false` to stay on the main thread.
+- **OffscreenCanvas Worker (`useWorkerPreprocessing`, default `true`)**: When the browser supports `Worker`, `OffscreenCanvas`, and `createImageBitmap` (all modern Chromium, Firefox, and Safari releases), `PreprocessWorkerClient` executes perspective homography warping, downscaled grayscale sampling, rotation/deskewing, shadow-flattened illumination normalization, dynamic MRZ band localization, and dual flat-field MRZ PNG encoding inside an isolated self-contained Blob Web Worker with zero Vite-specific `?worker` imports. If running in an older browser or strict CSP (`worker-src` blocking `blob:`), it degrades seamlessly to main-thread `HTMLCanvasElement` without throwing. Check `result.workerPreprocessed` to verify off-thread execution or pass `useWorkerPreprocessing: false` to stay on the main thread.
 - **`AbortSignal` (`signal?: AbortSignal`)**: Passing an `AbortController`'s `signal` into `scan()` or `scanPair()` guards every pipeline phase and immediately terminates any active Tesseract OCR workers + preprocessing Blob worker when `.abort()` is called, throwing `ScanAbortedError` (`name === 'AbortError'`, `code === 'SCAN_ABORTED'`). Aborting mid-scan never poisons OCR-B or native language fallback caches for subsequent scans.
 
 ### 3. PDF417 / AAMVA Barcode Decoding & Field Precedence
@@ -382,11 +387,13 @@ import {
   computeVisibleVideoCrop,
   crossValidateMrzAndViz,
   detectDocumentQuad,
+  detectDynamicMrzBand,
   detectPdf417Barcode,
   detectPortraitBoundsFromRgba,
   detectSignatureBoundsFromRgba,
   detectSpecimenWatermark,
   extractPortraitAndSignature,
+  flattenShadowIlluminationBuffer,
   inferNativeVizLanguageFromText,
   isScanAbortedError,
   mergeDocumentSides,
@@ -395,6 +402,7 @@ import {
   parseVizText,
   resolveNativeVizLanguage,
   supportsWorkerPreprocessing,
+  synthesizeConsensusMrz,
 } from 'docscan-ocr';
 ```
 
@@ -406,8 +414,8 @@ import {
 | --- | --- |
 | `public/lib/docscan-ocr.latest.umd.js` | Always-latest browser UMD bundle (exposes global `window.DocScanOCR`) |
 | `public/lib/docscan-ocr.latest.es.js` | Always-latest browser native ES module bundle |
-| `public/lib/docscan-ocr.v0.0.7.umd.js` | Version-pinned (`v0.0.7`) UMD bundle |
-| `public/lib/docscan-ocr.v0.0.7.es.js` | Version-pinned (`v0.0.7`) ES module bundle |
+| `public/lib/docscan-ocr.v0.0.8.umd.js` | Version-pinned (`v0.0.8`) UMD bundle |
+| `public/lib/docscan-ocr.v0.0.8.es.js` | Version-pinned (`v0.0.8`) ES module bundle |
 | `public/lib/types/index.d.ts` | TypeScript declaration files for all exports |
 
 ---
@@ -426,24 +434,24 @@ npm run build:lib # Rebuild latest + versioned ESM/UMD bundles & .d.ts types (pu
 
 ```text
 ├── public/
-│   └── lib/                     # Ready-compiled latest & v0.0.7 UMD/ESM bundles & .d.ts types
+│   └── lib/                     # Ready-compiled latest & v0.0.8 UMD/ESM bundles & .d.ts types
 ├── src/
 │   ├── scanner/                 # Framework-agnostic OCR, barcode & parser SDK
 │   │   ├── index.ts             # Public library entry point
-│   │   ├── version.ts           # SCANNER_VERSION ('0.0.7')
-│   │   ├── mediaExtractor.ts    # Portrait/signature cropper & red watermark OCR isolator
+│   │   ├── version.ts           # SCANNER_VERSION ('0.0.8')
+│   │   ├── mediaExtractor.ts    # Portrait symmetry/hologram cropper, rule-filtered signature & watermark isolator
 │   │   ├── specimenValidator.ts # Specimen watermark detector & single-side MRZ↔VIZ validator
 │   │   ├── preprocessWorker.ts  # OffscreenCanvas Web Worker client & AbortSignal helpers
 │   │   ├── pdf417Decoder.ts     # Native BarcodeDetector + @zxing/library PDF417 decoder
 │   │   ├── aamvaParser.ts       # AAMVA CDS v01-v10+ parser & US/CA IIN directory
 │   │   ├── vizLanguages.ts      # Country-routed native VIZ language resolver & overrides
 │   │   ├── qualityGate.ts       # CameraAutoCapture, computeVisibleVideoCrop & quality gate
-│   │   ├── ocrEngine.ts         # DocumentScanner class, workers, AbortSignal & scanPair()
+│   │   ├── ocrEngine.ts         # DocumentScanner class, consensus MRZ voting, AbortSignal & scanPair()
 │   │   ├── perspective.ts       # 4-corner quad detection & 3x3 homography perspective warp
 │   │   ├── pairMerger.ts        # Front + back ID merging & consistency conflict detection
 │   │   ├── orientation.ts       # Fine deskew & 4-way orientation analyzer
-│   │   ├── imagePreprocessor.ts # HTMLCanvas fallback scaling, rotation & MRZ enhancement
-│   │   ├── mrzParser.ts         # ICAO 9303 MRZ parser & Modulo-10 check digits
+│   │   ├── imagePreprocessor.ts # Shadow illumination flattening, dynamic MRZ band locator & canvas fallback
+│   │   ├── mrzParser.ts         # ICAO 9303 MRZ parser, consensus voter & joint check-digit repair
 │   │   ├── vizParser.ts         # Multilingual pan-European Visual Inspection Zone extractor
 │   │   ├── countries.ts         # ISO 3166-1 alpha-3 & ICAO issuing state codes
 │   │   └── types.ts             # TypeScript interfaces

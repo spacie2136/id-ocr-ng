@@ -29,8 +29,8 @@ export declare function detectPortraitBoundsFromRgba(rgba: Uint8ClampedArray, w:
 } | null;
 /**
  * Pure RGBA buffer signature region detector.
- * Prioritizes VIZ signature labels (e.g., "Holder's signature", "Firma del titular",
- * "Unterschrift") and falls back to cursive ink-cluster detection above the MRZ zone.
+ * Prioritizes VIZ signature labels (e.g., "Holder's signature", "Vlastoručni potpis",
+ * "Firma del titular", "Unterschrift") and falls back to cursive ink-cluster detection above the MRZ zone.
  */
 export declare function detectSignatureBoundsFromRgba(rgba: Uint8ClampedArray, w: number, h: number, options?: {
     mrz?: MrzParsedData | null;

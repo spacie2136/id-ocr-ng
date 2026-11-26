@@ -1,5 +1,13 @@
 import type { GrayscaleBuffer, ImageInput, ImageSurface, PreprocessedResult } from './types';
 
+export interface DynamicMrzBandResult {
+  detected: boolean;
+  broadTop: number;
+  broadBottom: number;
+  tightTop: number;
+  tightBottom: number;
+}
+
 export function getSurfaceDimensions(surface: ImageSurface): { width: number; height: number } {
   if (typeof HTMLImageElement !== 'undefined' && surface instanceof HTMLImageElement) {
     return {
@@ -142,22 +150,261 @@ export function sampleDownscaledGrayscale(
   return { data: gray, width, height };
 }
 
-function applyContrastGrayscale(ctx: CanvasRenderingContext2D, width: number, height: number) {
+/**
+ * Estimates a 16x12 coarse 88th-percentile illumination surface with 3x3 max smoothing
+ * so dark portrait boxes borrow paper brightness from neighboring tiles.
+ * Only flattens uneven lighting when tile spread >= 28 so flat digital scans remain untouched.
+ */
+export function flattenShadowIlluminationBuffer(
+  gray: Uint8ClampedArray,
+  width: number,
+  height: number
+): { applied: boolean; spread: number } {
+  if (width < 32 || height < 24 || gray.length < width * height) {
+    return { applied: false, spread: 0 };
+  }
+
+  const cols = 16;
+  const rows = 12;
+  const tileBg = new Float32Array(rows * cols);
+  const sampleBuf: number[] = [];
+
+  for (let r = 0; r < rows; r++) {
+    const y0 = Math.floor((r * height) / rows);
+    const y1 = Math.max(y0 + 1, Math.floor(((r + 1) * height) / rows));
+    const stepY = Math.max(1, Math.floor((y1 - y0) / 14));
+    for (let c = 0; c < cols; c++) {
+      const x0 = Math.floor((c * width) / cols);
+      const x1 = Math.max(x0 + 1, Math.floor(((c + 1) * width) / cols));
+      const stepX = Math.max(1, Math.floor((x1 - x0) / 14));
+      sampleBuf.length = 0;
+      for (let y = y0; y < y1; y += stepY) {
+        const rowOff = y * width;
+        for (let x = x0; x < x1; x += stepX) {
+          sampleBuf.push(gray[rowOff + x]);
+        }
+      }
+      sampleBuf.sort((a, b) => a - b);
+      tileBg[r * cols + c] =
+        sampleBuf.length > 0 ? sampleBuf[Math.floor(sampleBuf.length * 0.88)] : 255;
+    }
+  }
+
+  const smoothed = new Float32Array(rows * cols);
+  let bgMin = 255;
+  let bgMax = 0;
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      let localMax = 0;
+      for (let dr = -1; dr <= 1; dr++) {
+        const rr = Math.max(0, Math.min(rows - 1, r + dr));
+        for (let dc = -1; dc <= 1; dc++) {
+          const cc = Math.max(0, Math.min(cols - 1, c + dc));
+          const val = tileBg[rr * cols + cc];
+          if (val > localMax) localMax = val;
+        }
+      }
+      const clamped = Math.max(64, localMax);
+      smoothed[r * cols + c] = clamped;
+      if (clamped < bgMin) bgMin = clamped;
+      if (clamped > bgMax) bgMax = clamped;
+    }
+  }
+
+  const spread = bgMax - bgMin;
+  if (spread < 28) {
+    return { applied: false, spread };
+  }
+
+  const tileW = width / cols;
+  const tileH = height / rows;
+
+  for (let y = 0; y < height; y++) {
+    const gy = y / tileH - 0.5;
+    const r0 = Math.max(0, Math.min(rows - 1, Math.floor(gy)));
+    const r1 = Math.max(0, Math.min(rows - 1, r0 + 1));
+    const fy = Math.max(0, Math.min(1, gy - r0));
+    const rowOff = y * width;
+
+    for (let x = 0; x < width; x++) {
+      const gx = x / tileW - 0.5;
+      const c0 = Math.max(0, Math.min(cols - 1, Math.floor(gx)));
+      const c1 = Math.max(0, Math.min(cols - 1, c0 + 1));
+      const fx = Math.max(0, Math.min(1, gx - c0));
+
+      const b00 = smoothed[r0 * cols + c0];
+      const b10 = smoothed[r0 * cols + c1];
+      const b01 = smoothed[r1 * cols + c0];
+      const b11 = smoothed[r1 * cols + c1];
+
+      const top = b00 + (b10 - b00) * fx;
+      const bot = b01 + (b11 - b01) * fx;
+      const localBg = Math.max(48, top + (bot - top) * fy);
+
+      const idx = rowOff + x;
+      const flattened = Math.min(255, Math.round((gray[idx] * 244) / localBg));
+      gray[idx] = flattened;
+    }
+  }
+
+  return { applied: true, spread };
+}
+
+/**
+ * Locates dense monospace MRZ rows inside the lower half of a rectified upright document.
+ * Requires strong dark ink contrast (>= 52) so pastel guilloche backgrounds never bridge
+ * across the lower half, tightening strips cleanly around TD1/TD3 MRZ lines.
+ */
+export function detectDynamicMrzBand(
+  gray: Uint8ClampedArray,
+  width: number,
+  height: number
+): DynamicMrzBandResult {
+  const fallback: DynamicMrzBandResult = {
+    detected: false,
+    broadTop: 0.6,
+    broadBottom: 0.982,
+    tightTop: 0.7,
+    tightBottom: 0.982,
+  };
+
+  if (width < 120 || height < 80 || gray.length < width * height) {
+    return fallback;
+  }
+
+  const yStart = Math.floor(height * 0.48);
+  const yEnd = Math.min(height - 2, Math.floor(height * 0.99));
+  const xStart = Math.floor(width * 0.025);
+  const xEnd = Math.ceil(width * 0.975);
+  const stepX = Math.max(1, Math.floor((xEnd - xStart) / 480));
+
+  const candidateRows: number[] = [];
+  const rowSamples: number[] = [];
+
+  for (let y = yStart; y <= yEnd; y++) {
+    const rowOff = y * width;
+    rowSamples.length = 0;
+    for (let x = xStart; x < xEnd; x += stepX) {
+      rowSamples.push(gray[rowOff + x]);
+    }
+    if (rowSamples.length < 24) continue;
+    rowSamples.sort((a, b) => a - b);
+    const rowBg = rowSamples[Math.floor(rowSamples.length * 0.88)];
+    const rowLow = rowSamples[Math.floor(rowSamples.length * 0.02)];
+    if (rowBg - rowLow < 52) continue;
+
+    const threshold = Math.max(42, rowBg - Math.max(36, (rowBg - rowLow) * 0.46));
+    let transitions = 0;
+    let inkSamples = 0;
+    let prevDark = false;
+    let firstInkX = xEnd;
+    let lastInkX = xStart;
+
+    for (let x = xStart; x < xEnd; x += stepX) {
+      const dark = gray[rowOff + x] < threshold;
+      if (dark) {
+        inkSamples++;
+        if (x < firstInkX) firstInkX = x;
+        if (x > lastInkX) lastInkX = x;
+      }
+      if (x > xStart && dark !== prevDark) {
+        transitions++;
+      }
+      prevDark = dark;
+    }
+
+    const inkFrac = inkSamples / rowSamples.length;
+    const spanRatio = (lastInkX - firstInkX) / width;
+
+    if (transitions >= 34 && inkFrac >= 0.03 && inkFrac <= 0.46 && spanRatio >= 0.56) {
+      candidateRows.push(y);
+    }
+  }
+
+  if (candidateRows.length < 4) {
+    return fallback;
+  }
+
+  // Inter-line MRZ gap on TD3/TD1 docs spans ~3%-5% of document height
+  const maxGap = Math.max(6, Math.round(height * 0.055));
+  interface Cluster {
+    top: number;
+    bottom: number;
+    count: number;
+  }
+  const clusters: Cluster[] = [];
+  let cur: Cluster = { top: candidateRows[0], bottom: candidateRows[0], count: 1 };
+
+  for (let i = 1; i < candidateRows.length; i++) {
+    const y = candidateRows[i];
+    if (y - cur.bottom <= maxGap) {
+      cur.bottom = y;
+      cur.count++;
+    } else {
+      clusters.push(cur);
+      cur = { top: y, bottom: y, count: 1 };
+    }
+  }
+  clusters.push(cur);
+
+  let best: Cluster | null = null;
+  let bestScore = -1;
+  for (const c of clusters) {
+    const spanNorm = (c.bottom - c.top + 1) / height;
+    const bottomNorm = c.bottom / height;
+    if (spanNorm < 0.04 || spanNorm > 0.44 || bottomNorm < 0.72 || c.count < 6) {
+      continue;
+    }
+    const score = c.count * (bottomNorm >= 0.8 ? 1.25 : 1);
+    if (score > bestScore) {
+      bestScore = score;
+      best = c;
+    }
+  }
+
+  if (!best) {
+    return fallback;
+  }
+
+  const bandTop = best.top / height;
+  const bandBottom = best.bottom / height;
+
+  const tightTop = Math.max(0.54, Math.min(0.84, bandTop - 0.035));
+  const tightBottom = Math.min(0.995, Math.max(tightTop + 0.1, bandBottom + 0.035));
+
+  const broadTop = Math.max(0.48, Math.min(0.66, bandTop - 0.065));
+  const broadBottom = Math.min(0.996, Math.max(0.982, bandBottom + 0.04));
+
+  return {
+    detected: true,
+    broadTop,
+    broadBottom,
+    tightTop,
+    tightBottom,
+  };
+}
+
+function applyContrastGrayscale(ctx: CanvasRenderingContext2D, width: number, height: number): GrayscaleBuffer {
   const imageData = ctx.getImageData(0, 0, width, height);
   const data = imageData.data;
-  const histogram = new Uint32Array(256);
+  const gray = new Uint8ClampedArray(width * height);
 
+  for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+    gray[p] = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
+  }
+
+  flattenShadowIlluminationBuffer(gray, width, height);
+
+  const histogram = new Uint32Array(256);
   const marginX = Math.floor(width * 0.02);
   const marginY = Math.floor(height * 0.02);
   let samplePixels = 0;
 
   for (let y = 0; y < height; y++) {
+    const rowOff = y * width;
     for (let x = 0; x < width; x++) {
-      const i = (y * width + x) * 4;
-      const lum = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
-      data[i] = lum;
-      data[i + 1] = lum;
-      data[i + 2] = lum;
+      const lum = gray[rowOff + x];
       if (x >= marginX && x < width - marginX && y >= marginY && y < height - marginY) {
         histogram[lum]++;
         samplePixels++;
@@ -194,14 +441,16 @@ function applyContrastGrayscale(ctx: CanvasRenderingContext2D, width: number, he
   high = Math.min(246, Math.max(225, high));
 
   const range = Math.max(1, high - low);
-  for (let i = 0; i < data.length; i += 4) {
-    const stretched = Math.max(0, Math.min(255, ((data[i] - low) * 255) / range));
+  for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+    const stretched = Math.max(0, Math.min(255, Math.round(((gray[p] - low) * 255) / range)));
+    gray[p] = stretched;
     data[i] = stretched;
     data[i + 1] = stretched;
     data[i + 2] = stretched;
   }
 
   ctx.putImageData(imageData, 0, 0);
+  return { data: gray, width, height };
 }
 
 /**
@@ -405,9 +654,9 @@ function buildMrzStrip(
 }
 
 /**
- * Prepares original, contrast-enhanced full-document, and dual MRZ-strip
- * canvases directly inside the browser with support for coarse 90-degree
- * rotation and arbitrary-angle fine deskewing.
+ * Prepares original, shadow-flattened contrast-enhanced full-document, and dynamically
+ * localized dual MRZ-strip canvases directly inside the browser with support for coarse
+ * 90-degree rotation and arbitrary-angle fine deskewing.
  */
 export async function preprocessDocumentImage(
   input: ImageInput,
@@ -482,16 +731,37 @@ export async function preprocessDocumentImage(
   if (!enhCtx) throw new Error('2D canvas context unavailable');
   enhCtx.drawImage(origCanvas, 0, 0);
 
+  let mrzBand: DynamicMrzBandResult;
   if (preprocess) {
-    applyContrastGrayscale(enhCtx, targetW, targetH);
+    const enhGray = applyContrastGrayscale(enhCtx, targetW, targetH);
+    mrzBand = detectDynamicMrzBand(enhGray.data, targetW, targetH);
+  } else {
+    const rgba = enhCtx.getImageData(0, 0, targetW, targetH).data;
+    const rawGray = new Uint8ClampedArray(targetW * targetH);
+    for (let i = 0, p = 0; i < rgba.length; i += 4, p++) {
+      rawGray[p] = Math.round(0.299 * rgba[i] + 0.587 * rgba[i + 1] + 0.114 * rgba[i + 2]);
+    }
+    mrzBand = detectDynamicMrzBand(rawGray, targetW, targetH);
   }
   const enhancedDataUrl = enhCanvas.toDataURL('image/png');
 
-  // Broad strip (60% to 98.2% — avoids holographic mirror strips above ~58% on ID cards while covering all 3 TD1 lines)
-  const broadStrip = buildMrzStrip(origCanvas, targetW, targetH, 0.60, 0.982, preprocess);
+  const broadStrip = buildMrzStrip(
+    origCanvas,
+    targetW,
+    targetH,
+    mrzBand.broadTop,
+    mrzBand.broadBottom,
+    preprocess
+  );
 
-  // Tight strip (70% to 98.2% — isolates 2-line TD3 passport MRZ cleanly)
-  const tightStrip = buildMrzStrip(origCanvas, targetW, targetH, 0.70, 0.982, preprocess);
+  const tightStrip = buildMrzStrip(
+    origCanvas,
+    targetW,
+    targetH,
+    mrzBand.tightTop,
+    mrzBand.tightBottom,
+    preprocess
+  );
 
   return {
     originalDataUrl,

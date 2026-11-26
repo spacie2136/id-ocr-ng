@@ -1,7 +1,7 @@
 {
   "name": "docscan-ocr",
   "private": true,
-  "version": "0.0.7",
+  "version": "0.0.8",
   "type": "module",
   "main": "./public/lib/docscan-ocr.latest.umd.js",
   "module": "./public/lib/docscan-ocr.latest.es.js",

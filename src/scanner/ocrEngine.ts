@@ -6,7 +6,7 @@ import {
   sampleDownscaledGrayscale,
 } from './imagePreprocessor';
 import { extractPortraitAndSignature } from './mediaExtractor';
-import { parseMrzFromText } from './mrzParser';
+import { parseMrzFromText, synthesizeConsensusMrz } from './mrzParser';
 import { analyzeDocumentOrientation } from './orientation';
 import { mergeDocumentSides } from './pairMerger';
 import { detectPdf417Barcode } from './pdf417Decoder';
@@ -1426,6 +1426,10 @@ export class DocumentScanner {
 
     let mrzData: MrzParsedData | null = null;
     if (candidates.length > 0) {
+      const consensus = synthesizeConsensusMrz(candidates);
+      if (consensus) {
+        candidates.push(consensus);
+      }
       candidates.sort((a, b) => scoreMrzCandidate(b) - scoreMrzCandidate(a));
       mrzData = candidates[0];
     }
