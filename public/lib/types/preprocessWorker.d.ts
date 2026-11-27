@@ -1,4 +1,5 @@
 import type { DocumentQuad, GrayscaleBuffer, PreprocessedResult } from './types';
+import type { PreprocessDocumentOptions } from './imagePreprocessor';
 export declare class ScanAbortedError extends Error {
     readonly name = "AbortError";
     readonly code = "SCAN_ABORTED";
@@ -25,10 +26,6 @@ export declare class PreprocessWorkerClient {
     private runJob;
     warpPerspective(surface: HTMLImageElement | HTMLCanvasElement | ImageBitmap, corners: DocumentQuad, signal?: AbortSignal): Promise<ImageBitmap | null>;
     sampleDownscaledGrayscale(surface: HTMLImageElement | HTMLCanvasElement | ImageBitmap, maxDim?: number, signal?: AbortSignal): Promise<GrayscaleBuffer | null>;
-    preprocessDocument(surface: HTMLImageElement | HTMLCanvasElement | ImageBitmap, options: {
-        preprocess?: boolean;
-        rotation?: 0 | 90 | 180 | 270;
-        deskewDegrees?: number;
-    }, signal?: AbortSignal): Promise<PreprocessedResult | null>;
+    preprocessDocument(surface: HTMLImageElement | HTMLCanvasElement | ImageBitmap, options: PreprocessDocumentOptions, signal?: AbortSignal): Promise<PreprocessedResult | null>;
     terminate(): void;
 }

@@ -11,7 +11,7 @@ import type {
 const WORK_WIDTH = 360;
 
 const SIGNATURE_LABEL_RE =
-  /\b(?:signature|holder['’`]?s?\s*sig(?:nature)?|unterschrift|firma(?:\s*del\s*titular)?|(?:vlastoru[cč]n[io]\s*)?p[ao]tp[il]{1,2}[sz]?|para[sš]as|podpis|assinatura|handtekening|allkiri|al[aá][ií]r[aá]s|semn[aă]tur[aă]|allekirjoitus|underskrift|paraksts)\b/i;
+  /\b(?:signature|holder['’`]?s?\s*sig(?:nature)?|unterschrift|firma(?:\s*del\s*titular)?|(?:vlastoru[cč]n[io]\s*)?p[aeo]tp[il]{1,2}[nsz]?|para[sš]as|podpis|assinatura|handtekening|allkiri|al[aá][ií]r[aá]s|semn[aă]tur[aă]|allekirjoitus|underskrift|paraksts)\b/i;
 
 export interface ExtractMediaOptions {
   documentType?: DocumentType;
@@ -39,7 +39,34 @@ function getSurfaceDimensions(surface: ImageSurface): { width: number; height: n
   return { width: surface.width, height: surface.height };
 }
 
-function loadDataUrlAsCanvas(dataUrl: string): Promise<HTMLCanvasElement> {
+function downsampleRgbaIfNeeded(
+  rgba: Uint8ClampedArray,
+  w: number,
+  h: number,
+  maxWidth = WORK_WIDTH
+): { data: Uint8ClampedArray; w: number; h: number } {
+  if (w <= maxWidth) return { data: rgba, w, h };
+  const dw = maxWidth;
+  const dh = Math.max(1, Math.round((h * dw) / w));
+  const out = new Uint8ClampedArray(dw * dh * 4);
+  for (let y = 0; y < dh; y++) {
+    const sy = Math.min(h - 1, Math.floor(((y + 0.5) * h) / dh));
+    const sRow = sy * w;
+    const dRow = y * dw;
+    for (let x = 0; x < dw; x++) {
+      const sx = Math.min(w - 1, Math.floor(((x + 0.5) * w) / dw));
+      const sOff = (sRow + sx) * 4;
+      const dOff = (dRow + x) * 4;
+      out[dOff] = rgba[sOff];
+      out[dOff + 1] = rgba[sOff + 1];
+      out[dOff + 2] = rgba[sOff + 2];
+      out[dOff + 3] = rgba[sOff + 3];
+    }
+  }
+  return { data: out, w: dw, h: dh };
+}
+
+function loadUrlAsCanvas(url: string): Promise<HTMLCanvasElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
@@ -57,8 +84,36 @@ function loadDataUrlAsCanvas(dataUrl: string): Promise<HTMLCanvasElement> {
       resolve(canvas);
     };
     img.onerror = () => reject(new Error('Failed to decode document image for media extraction'));
-    img.src = dataUrl;
+    img.src = url;
   });
+}
+
+async function loadBlobAsCanvas(blob: Blob): Promise<HTMLCanvasElement | null> {
+  if (typeof createImageBitmap === 'function') {
+    try {
+      const bitmap = await createImageBitmap(blob);
+      try {
+        return surfaceToCanvas(bitmap);
+      } finally {
+        try {
+          bitmap.close();
+        } catch {
+          // Ignore already-closed bitmap
+        }
+      }
+    } catch {
+      // Fall back to ObjectURL below
+    }
+  }
+  if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+    const objectUrl = URL.createObjectURL(blob);
+    try {
+      return await loadUrlAsCanvas(objectUrl);
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
+  }
+  return null;
 }
 
 function surfaceToCanvas(surface: ImageSurface): HTMLCanvasElement | null {
@@ -102,6 +157,26 @@ function normalizeTextBoxes(
     }));
 }
 
+function fillBoxMask(
+  mask: Uint8Array,
+  b: { x0: number; y0: number; x1: number; y1: number },
+  workW: number,
+  workH: number
+): void {
+  const padX = 2;
+  const padY = 2;
+  const rx0 = Math.max(0, b.x0 - padX);
+  const ry0 = Math.max(0, b.y0 - padY);
+  const rx1 = Math.min(workW - 1, b.x1 + padX);
+  const ry1 = Math.min(workH - 1, b.y1 + padY);
+  for (let y = ry0; y <= ry1; y++) {
+    const row = y * workW;
+    for (let x = rx0; x <= rx1; x++) {
+      mask[row + x] = 1;
+    }
+  }
+}
+
 function buildTextMask(
   boxes: Array<{ x0: number; y0: number; x1: number; y1: number; text: string }>,
   workW: number,
@@ -112,22 +187,51 @@ function buildTextMask(
     const bw = b.x1 - b.x0;
     const bh = b.y1 - b.y0;
     const cleaned = b.text.replace(/[^A-Za-z0-9\u00C0-\u024F]/g, '');
-    // Skip 1-2 char OCR boxes so hallucinated portrait noise ("EA") or cursive strokes ("7", "s") aren't erased
+    if (cleaned.length <= 2) continue;
+    if (bh > workH * 0.055 && cleaned.length <= 8) continue;
+    if (bw > workW * 0.45 && bh > workH * 0.25) continue;
+    fillBoxMask(mask, b, workW, workH);
+  }
+  return mask;
+}
+
+function buildSignatureTextMask(
+  boxes: Array<{ x0: number; y0: number; x1: number; y1: number; text: string }>,
+  workW: number,
+  workH: number,
+  sigLabels: Array<{ x0: number; y0: number; x1: number; y1: number; text: string }>
+): Uint8Array {
+  const mask = new Uint8Array(workW * workH);
+  for (const b of boxes) {
+    const bw = b.x1 - b.x0;
+    const bh = b.y1 - b.y0;
+    const cleaned = b.text.replace(/[^A-Za-z0-9\u00C0-\u024F]/g, '');
     if (cleaned.length <= 2) continue;
     if (bw > workW * 0.45 && bh > workH * 0.25) continue;
 
-    const padX = 2;
-    const padY = 2;
-    const rx0 = Math.max(0, b.x0 - padX);
-    const ry0 = Math.max(0, b.y0 - padY);
-    const rx1 = Math.min(workW - 1, b.x1 + padX);
-    const ry1 = Math.min(workH - 1, b.y1 + padY);
-    for (let y = ry0; y <= ry1; y++) {
-      const row = y * workW;
-      for (let x = rx0; x <= rx1; x++) {
-        mask[row + x] = 1;
-      }
+    const isPrintedLabelOrField =
+      SIGNATURE_LABEL_RE.test(b.text) ||
+      /[\/:|]/.test(b.text) ||
+      /\d{2}[./-]\d{2}/.test(b.text) ||
+      /\d{4,}/.test(b.text) ||
+      (/\d{2,}/.test(b.text) && cleaned.length >= 6) ||
+      (b.text.includes('<') && b.text.replace(/\s+/g, '').length >= 14);
+
+    if (!isPrintedLabelOrField) {
+      if (bh > workH * 0.045 && cleaned.length <= 8) continue;
+      if (cleaned.length <= 4 && !/[A-Z]{2,}/.test(cleaned)) continue;
+
+      const insideSigTargetZone = sigLabels.some(
+        (lbl) =>
+          b.y0 >= lbl.y1 - 4 &&
+          b.y0 <= lbl.y1 + Math.round(workH * 0.17) &&
+          b.x0 >= lbl.x0 - Math.round(workW * 0.05) &&
+          b.x1 <= Math.min(workW - 1, Math.max(lbl.x1 + Math.round(workW * 0.14), lbl.x0 + Math.round(workW * 0.40)))
+      );
+      if (insideSigTargetZone) continue;
     }
+
+    fillBoxMask(mask, b, workW, workH);
   }
   return mask;
 }
@@ -253,7 +357,6 @@ function estimateZonePaperColor(
   bs.sort((a, b) => a - b);
   chromas.sort((a, b) => a - b);
 
-  // 72nd percentile inside the zone represents the local security-tinted background paper
   const idx = Math.floor(rs.length * 0.72);
   const r = rs[idx];
   const g = gs[idx];
@@ -464,7 +567,6 @@ function scorePortraitComponents(
       const stdDev = Math.sqrt(variance);
       if (stdDev < 13) continue;
 
-      // Measure vertical bilateral symmetry (real portraits are strongly symmetric along X midpoint)
       const symY0 = expY0 + Math.floor(bh * 0.12);
       const symY1 = expY1 - Math.floor(bh * 0.14);
       const halfW = Math.floor(bw * 0.38);
@@ -600,7 +702,6 @@ function findPortraitInZone(
     }
   }
 
-  // Try crisp un-dilated core components first so guilloche borders never bridge to the portrait
   const directCandidate = scorePortraitComponents(
     rgba,
     w,
@@ -620,7 +721,6 @@ function findPortraitInZone(
   );
   if (directCandidate) return directCandidate;
 
-  // Fallback: true 3x3 morphological closing (dilate -> erode) to reconnect low-contrast fragmented portraits
   const dilated = new Uint8Array(zw * zh);
   for (let y = 0; y < zh; y++) {
     for (let x = 0; x < zw; x++) {
@@ -673,8 +773,8 @@ function findPortraitInZone(
 }
 
 /**
- * Pure RGBA buffer portrait region detector. Exposed for deterministic unit testing
- * in both browser and Node.js environments.
+ * Pure RGBA buffer portrait region detector. Automatically scales inputs wider than
+ * `WORK_WIDTH` down to canonical resolution so results are identical across full-size and mobile captures.
  */
 export function detectPortraitBoundsFromRgba(
   rgba: Uint8ClampedArray,
@@ -690,21 +790,26 @@ export function detectPortraitBoundsFromRgba(
 ): { bbox: NormalizedRect; method: 'pixel_contour' } | null {
   if (w < 40 || h < 40 || rgba.length < w * h * 4) return null;
 
+  const sampled = downsampleRgbaIfNeeded(rgba, w, h, WORK_WIDTH);
+  const workData = sampled.data;
+  const workW = sampled.w;
+  const workH = sampled.h;
+
   const boxes = normalizeTextBoxes(
     options.vizLineBoxes ?? [],
     options.docWidth ?? w,
     options.docHeight ?? h,
-    w,
-    h
+    workW,
+    workH
   );
-  const textMask = buildTextMask(boxes, w, h);
-  const mrzTop = estimateMrzTopRatio(boxes, w, h, options.mrz);
-  const paper = estimatePaperColor(rgba, w, h);
+  const textMask = buildTextMask(boxes, workW, workH);
+  const mrzTop = estimateMrzTopRatio(boxes, workW, workH, options.mrz);
+  const paper = estimatePaperColor(workData, workW, workH);
 
   const maxY = Math.min(0.86, Math.max(0.55, mrzTop - 0.015));
 
-  const left = findPortraitInZone(rgba, w, h, textMask, paper, 0.015, 0.37, 0.07, maxY, 1.15);
-  const right = findPortraitInZone(rgba, w, h, textMask, paper, 0.63, 0.985, 0.07, maxY, 0.92);
+  const left = findPortraitInZone(workData, workW, workH, textMask, paper, 0.015, 0.37, 0.07, maxY, 1.15);
+  const right = findPortraitInZone(workData, workW, workH, textMask, paper, 0.63, 0.985, 0.07, maxY, 0.92);
 
   const winner = !left
     ? right
@@ -894,7 +999,6 @@ function findInkBoundingBoxInSearchRect(
     }
   }
 
-  // Suppress continuous horizontal separator rules / printed signature baselines (<=3 rows tall, >=68% width)
   const isRuleRow = new Uint8Array(bh);
   for (let ly = 0; ly < bh; ly++) {
     let rowSum = 0;
@@ -928,7 +1032,6 @@ function findInkBoundingBoxInSearchRect(
     ly = runEnd;
   }
 
-  // Denoise isolated single pixels in-place
   const cleanInk = new Uint8Array(bw * bh);
   let minX = bw;
   let maxX = -1;
@@ -1011,32 +1114,37 @@ export function detectSignatureBoundsFromRgba(
 ): { bbox: NormalizedRect; method: 'viz_label' | 'layout_heuristic' } | null {
   if (w < 40 || h < 40 || rgba.length < w * h * 4) return null;
 
+  const sampled = downsampleRgbaIfNeeded(rgba, w, h, WORK_WIDTH);
+  const workData = sampled.data;
+  const workW = sampled.w;
+  const workH = sampled.h;
+
   const boxes = normalizeTextBoxes(
     options.vizLineBoxes ?? [],
     options.docWidth ?? w,
     options.docHeight ?? h,
-    w,
-    h
+    workW,
+    workH
   );
-  const textMask = buildTextMask(boxes, w, h);
-  const mrzTop = estimateMrzTopRatio(boxes, w, h, options.mrz);
-  const maxAllowedY = Math.min(h - 2, Math.floor((mrzTop - 0.015) * h));
-
   const sigLabels = boxes.filter((b) => SIGNATURE_LABEL_RE.test(b.text));
+  const textMask = buildSignatureTextMask(boxes, workW, workH, sigLabels);
+  const mrzTop = estimateMrzTopRatio(boxes, workW, workH, options.mrz);
+  const maxAllowedY = Math.min(workH - 2, Math.floor((mrzTop - 0.015) * workH));
+
   for (const lbl of sigLabels) {
     const belowY0 = lbl.y1 + 2;
-    const belowY1 = Math.min(maxAllowedY, lbl.y1 + Math.round(h * 0.165));
-    const belowX0 = Math.max(0, lbl.x0 - Math.round(w * 0.03));
+    const belowY1 = Math.min(maxAllowedY, lbl.y1 + Math.round(workH * 0.165));
+    const belowX0 = Math.max(0, lbl.x0 - Math.round(workW * 0.03));
     const belowX1 = Math.min(
-      w - 1,
-      Math.max(lbl.x1 + Math.round(w * 0.12), lbl.x0 + Math.round(w * 0.38))
+      workW - 1,
+      Math.max(lbl.x1 + Math.round(workW * 0.12), lbl.x0 + Math.round(workW * 0.38))
     );
 
     if (belowY1 - belowY0 >= 8) {
       const foundBelow = findInkBoundingBoxInSearchRect(
-        rgba,
-        w,
-        h,
+        workData,
+        workW,
+        workH,
         textMask,
         options.portraitRect ?? null,
         belowX0,
@@ -1052,14 +1160,14 @@ export function detectSignatureBoundsFromRgba(
     }
 
     const rightX0 = lbl.x1 + 4;
-    const rightX1 = Math.min(w - 1, lbl.x1 + Math.round(w * 0.34));
-    const rightY0 = Math.max(0, lbl.y0 - Math.round(h * 0.02));
-    const rightY1 = Math.min(maxAllowedY, lbl.y1 + Math.round(h * 0.03));
+    const rightX1 = Math.min(workW - 1, lbl.x1 + Math.round(workW * 0.34));
+    const rightY0 = Math.max(0, lbl.y0 - Math.round(workH * 0.02));
+    const rightY1 = Math.min(maxAllowedY, lbl.y1 + Math.round(workH * 0.03));
     if (rightX1 - rightX0 >= 20 && rightY1 - rightY0 >= 8) {
       const foundRight = findInkBoundingBoxInSearchRect(
-        rgba,
-        w,
-        h,
+        workData,
+        workW,
+        workH,
         textMask,
         options.portraitRect ?? null,
         rightX0,
@@ -1075,20 +1183,20 @@ export function detectSignatureBoundsFromRgba(
     }
   }
 
-  const heuristicY0 = Math.round(h * (options.mrz ? 0.53 : 0.62));
-  const heuristicY1 = Math.min(Math.round(h * 0.88), maxAllowedY);
+  const heuristicY0 = Math.round(workH * (options.mrz ? 0.53 : 0.62));
+  const heuristicY1 = Math.min(Math.round(workH * 0.88), maxAllowedY);
 
   if (heuristicY1 - heuristicY0 >= 12) {
     const regions = [
-      { x0: Math.round(w * 0.30), x1: Math.round(w * 0.78) },
-      { x0: Math.round(w * 0.56), x1: Math.round(w * 0.95) },
+      { x0: Math.round(workW * 0.30), x1: Math.round(workW * 0.78) },
+      { x0: Math.round(workW * 0.56), x1: Math.round(workW * 0.95) },
     ];
     let bestHeuristic: { bbox: NormalizedRect; score: number } | null = null;
     for (const reg of regions) {
       const match = findInkBoundingBoxInSearchRect(
-        rgba,
-        w,
-        h,
+        workData,
+        workW,
+        workH,
         textMask,
         options.portraitRect ?? null,
         reg.x0,
@@ -1099,7 +1207,7 @@ export function detectSignatureBoundsFromRgba(
         1.65,
         true
       );
-      if (match && match.bbox.height * h >= 7 && match.bbox.width >= 0.08) {
+      if (match && match.bbox.height * workH >= 7 && match.bbox.width >= 0.08) {
         if (!bestHeuristic || match.score > bestHeuristic.score) {
           bestHeuristic = match;
         }
@@ -1215,7 +1323,6 @@ export function buildColoredWatermarkOcrCanvas(
   }
   mCtx.putImageData(outData, 0, 0);
 
-  // Estimate dominant orientation (-28°, 0°, or +28°) via horizontal projection variance
   const candidates: Array<{ angle: number; score: number }> = [];
   for (const angle of [0, 26, -26]) {
     const rad = (angle * Math.PI) / 180;
@@ -1265,7 +1372,7 @@ export function buildColoredWatermarkOcrCanvas(
  * and optional red-stamp watermark probe canvas from an upright, deskewed document image.
  */
 export async function extractPortraitAndSignature(
-  imageSource: string | ImageSurface,
+  imageSource: string | Blob | ImageSurface,
   options: ExtractMediaOptions = {}
 ): Promise<ExtractedDocumentMedia> {
   const {
@@ -1283,9 +1390,11 @@ export async function extractPortraitAndSignature(
 
   let fullCanvas: HTMLCanvasElement | null = null;
   if (typeof imageSource === 'string') {
-    fullCanvas = await loadDataUrlAsCanvas(imageSource);
+    fullCanvas = await loadUrlAsCanvas(imageSource);
+  } else if (typeof Blob !== 'undefined' && imageSource instanceof Blob) {
+    fullCanvas = await loadBlobAsCanvas(imageSource);
   } else {
-    fullCanvas = surfaceToCanvas(imageSource);
+    fullCanvas = surfaceToCanvas(imageSource as ImageSurface);
   }
 
   if (!fullCanvas || !fullCanvas.width || !fullCanvas.height) {

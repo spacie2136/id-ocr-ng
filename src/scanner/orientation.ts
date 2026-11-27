@@ -138,9 +138,6 @@ function scoreProjectionAngle(
 
   for (let i = 0; i < samples.length; i++) {
     const s = samples[i];
-    // Canvas clockwise rotation by -angleDeg maps (dx, dy) to:
-    //   u =  dx * cos + dy * sin
-    //   v = -dx * sin + dy * cos
     const u = s.dx * cos + s.dy * sin;
     const v = -s.dx * sin + s.dy * cos;
 
@@ -221,19 +218,37 @@ function computeEdgeBandScore(
     fromSlice: number,
     toSlice: number
   ): number => {
-    let best = 0;
-    let wideCount = 0;
+    const sliceScores = new Float32Array(slices);
     for (let s = fromSlice; s <= toSlice; s++) {
       let cov = 0;
       for (let b = 0; b < buckets; b++) cov += grid[s][b];
       const covFrac = cov / buckets;
-      if (covFrac >= 0.42) {
-        wideCount++;
-        const sliceScore = covFrac * weights[s];
-        if (sliceScore > best) best = sliceScore;
-      }
+      if (covFrac < 0.42) continue;
+
+      // Down-weight passport spine stitching / outer card borders touching extreme edge slices
+      const isOuterMargin = s <= 2 || s >= slices - 3;
+      const marginFactor = isOuterMargin ? 0.35 : 1.0;
+      const continuityBonus = covFrac >= 0.58 ? 1.45 : 1.0;
+      sliceScores[s] = covFrac * covFrac * weights[s] * marginFactor * continuityBonus;
     }
-    return best * (1 + Math.min(wideCount, 6) * 0.22);
+
+    // Score best compact 6-slice (~15% height) MRZ window rather than scattered VIZ headers
+    let bestWindow = 0;
+    const windowSize = 6;
+    for (let start = fromSlice; start <= Math.max(fromSlice, toSlice - windowSize + 1); start++) {
+      let winSum = 0;
+      let active = 0;
+      const end = Math.min(toSlice, start + windowSize - 1);
+      for (let s = start; s <= end; s++) {
+        if (sliceScores[s] > 0) {
+          winSum += sliceScores[s];
+          active++;
+        }
+      }
+      const total = winSum * (1 + Math.min(active, 4) * 0.12);
+      if (total > bestWindow) bestWindow = total;
+    }
+    return bestWindow;
   };
 
   // Top edge (0..34%) vs Bottom edge (66..99%)
@@ -341,11 +356,6 @@ export function analyzeDocumentOrientation(
 
   const edge = computeEdgeBandScore(samples, deskewDegrees, width, height);
 
-  // Build ordered list of coarse rotations [c0, c1, c2, c3]:
-  // - If MRZ edge is on bottom -> upright is 0°
-  // - If MRZ edge is on top -> upright is 180°
-  // - If MRZ edge is on right -> +90° clockwise moves right edge to bottom
-  // - If MRZ edge is on left -> +270° clockwise moves left edge to bottom
   const hPair: [0 | 180, 0 | 180] =
     edge.top > edge.bottom * 1.15 ? [180, 0] : [0, 180];
   const vPair: [90 | 270, 90 | 270] =

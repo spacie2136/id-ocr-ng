@@ -4,6 +4,7 @@ import {
   loadImageSurface,
   preprocessDocumentImage,
   sampleDownscaledGrayscale,
+  type PreprocessDocumentOptions,
 } from './imagePreprocessor';
 import { extractPortraitAndSignature } from './mediaExtractor';
 import { parseMrzFromText, synthesizeConsensusMrz } from './mrzParser';
@@ -19,10 +20,15 @@ import {
   isScanAbortedError,
   PreprocessWorkerClient,
   raceWithAbort,
+  ScanAbortedError,
   throwIfScanAborted,
 } from './preprocessWorker';
 import { assessImageQuality, QualityGateError } from './qualityGate';
-import { crossValidateMrzAndViz, detectSpecimenWatermark } from './specimenValidator';
+import {
+  crossValidateMrzAndViz,
+  detectSpecimenWatermark,
+  matchUnsplitMrzNameWithViz,
+} from './specimenValidator';
 import type {
   BarcodeParsedData,
   CroppedRegionInfo,
@@ -53,6 +59,31 @@ import { parseVizText } from './vizParser';
 
 const DEFAULT_MRZ_OCRB_LANG = 'ocrb_int';
 const DEFAULT_MRZ_OCRB_LANG_PATH = 'https://cdn.jsdelivr.net/gh/Shreeshrii/tessdata_ocrb@master';
+
+const nodeGlobal = globalThis as typeof globalThis & {
+  process?: { versions?: { node?: string } };
+  Buffer?: { from: (data: ArrayBuffer) => unknown };
+};
+
+const IS_NODE_ENV =
+  Boolean(nodeGlobal.process?.versions?.node) && typeof window === 'undefined';
+
+async function resolveTesseractInput(
+  blob: Blob | undefined,
+  dataUrl: string
+): Promise<Blob | string> {
+  if (!IS_NODE_ENV && blob) {
+    return blob;
+  }
+  if (dataUrl) {
+    return dataUrl;
+  }
+  if (blob && nodeGlobal.Buffer) {
+    const ab = await blob.arrayBuffer();
+    return nodeGlobal.Buffer.from(ab) as unknown as string;
+  }
+  return dataUrl;
+}
 
 function computeAge(dobIso: string | null): number | null {
   if (!dobIso) return null;
@@ -131,6 +162,49 @@ function toMrzTransliteration(str: string): string {
 
 function hasDiacritics(str: string): boolean {
   return /[^\u0000-\u007F]/.test(str);
+}
+
+/**
+ * Restores native diacritics on an ASCII MRZ name when the VIZ header label was
+ * illegible or skipped, provided the exact ASCII/ICAO-transliterated word appears
+ * with native diacritics in the full OCR text.
+ */
+function enrichAsciiNameFromNativeText(
+  asciiName: string | null | undefined,
+  cleanedFullText: string
+): string | null {
+  if (!asciiName || !cleanedFullText) return null;
+  const tokens = cleanedFullText.match(/[A-Za-z\u00C0-\u024F'-]{2,}/g);
+  if (!tokens || tokens.length === 0) return null;
+
+  const diacriticMap = new Map<string, string>();
+  for (const rawTok of tokens) {
+    if (!hasDiacritics(rawTok)) continue;
+    const upperTok = rawTok.toUpperCase();
+    const asciiKey = stripDiacritics(upperTok);
+    const translitKey = toMrzTransliteration(upperTok);
+    if (asciiKey && !diacriticMap.has(asciiKey)) {
+      diacriticMap.set(asciiKey, upperTok);
+    }
+    if (translitKey && !diacriticMap.has(translitKey)) {
+      diacriticMap.set(translitKey, upperTok);
+    }
+  }
+  if (diacriticMap.size === 0) return null;
+
+  let changed = false;
+  const enriched = asciiName
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => {
+      const replacement = diacriticMap.get(stripDiacritics(word));
+      if (replacement) {
+        changed = true;
+        return replacement;
+      }
+      return word;
+    });
+  return changed ? enriched.join(' ') : null;
 }
 
 function pickField<T>(
@@ -798,6 +872,15 @@ function scoreMrzCandidate(m: MrzParsedData): number {
   );
 }
 
+function isStrongTightMrzCandidate(m: MrzParsedData): boolean {
+  return (
+    m.allCheckDigitsValid &&
+    m.surname.trim().length >= 2 &&
+    m.issuingCountry.trim().length >= 1 &&
+    (m.format !== 'TD1' || m.rawLines.length === 3)
+  );
+}
+
 interface OrientationPassResult {
   coarse: 0 | 90 | 180 | 270;
   preprocessed: PreprocessedResult;
@@ -876,10 +959,42 @@ function scaleProgressCallback(
   };
 }
 
+function emptyVizData(): VizParsedData {
+  return {
+    documentTypeHint: null,
+    surname: null,
+    surnames: [],
+    givenNames: null,
+    fullName: null,
+    documentNumber: null,
+    personalNumber: null,
+    nationality: null,
+    issuingCountry: null,
+    dateOfBirth: null,
+    dateOfIssue: null,
+    dateOfExpiry: null,
+    sex: null,
+    placeOfBirth: null,
+    address: null,
+    parents: null,
+    issuingAuthority: null,
+    licenseClass: null,
+    restrictions: null,
+    endorsements: null,
+    height: null,
+    eyeColor: null,
+    hairColor: null,
+    detectedLines: [],
+    unmappedKeyValues: {},
+  };
+}
+
 export class DocumentScanner {
   private worker: Worker | null = null;
   private workerLang: string | null = null;
   private workerConfigKey: string | null = null;
+  private workerInitPromise: Promise<Worker> | null = null;
+  private workerInitKey: string | null = null;
 
   private vizNativeWorker: Worker | null = null;
   private vizNativeLang: string | null = null;
@@ -888,6 +1003,8 @@ export class DocumentScanner {
 
   private mrzWorker: Worker | null = null;
   private mrzWorkerConfigKey: string | null = null;
+  private mrzWorkerInitPromise: Promise<{ worker: Worker | null; modelUsed: MrzOcrModel }> | null = null;
+  private mrzWorkerInitKey: string | null = null;
   private mrzOcrbFailed = false;
 
   private preprocessWorker = new PreprocessWorkerClient();
@@ -905,6 +1022,7 @@ export class DocumentScanner {
       workerPath: override.workerPath ?? this.defaultWorkerConfig.workerPath,
       corePath: override.corePath ?? this.defaultWorkerConfig.corePath,
       langPath: override.langPath ?? this.defaultWorkerConfig.langPath,
+      langGzip: override.langGzip ?? this.defaultWorkerConfig.langGzip,
       workerBlobURL: override.workerBlobURL ?? this.defaultWorkerConfig.workerBlobURL,
       useWorkerPreprocessing:
         override.useWorkerPreprocessing ??
@@ -922,6 +1040,10 @@ export class DocumentScanner {
 
   private abortInFlightWorkers(): void {
     this.preprocessWorker.abortActiveWorker();
+    this.workerInitPromise = null;
+    this.workerInitKey = null;
+    this.mrzWorkerInitPromise = null;
+    this.mrzWorkerInitKey = null;
 
     if (this.worker) {
       const w = this.worker;
@@ -986,13 +1108,16 @@ export class DocumentScanner {
     signal?: AbortSignal
   ): Promise<Worker> {
     throwIfScanAborted(signal);
-    this.activeStageCallback = onProgress ?? null;
+    if (onProgress) {
+      this.activeStageCallback = onProgress;
+    }
 
     const mergedConfig = this.mergeWorkerConfig(workerConfig);
     const configKey = JSON.stringify({
       workerPath: mergedConfig.workerPath,
       corePath: mergedConfig.corePath,
       langPath: mergedConfig.langPath,
+      langGzip: mergedConfig.langGzip,
       workerBlobURL: mergedConfig.workerBlobURL,
     });
 
@@ -1004,6 +1129,11 @@ export class DocumentScanner {
       return this.worker;
     }
 
+    const initKey = `${language}:${configKey}`;
+    if (this.workerInitPromise && this.workerInitKey === initKey) {
+      return raceWithAbort(this.workerInitPromise, signal, () => this.abortInFlightWorkers());
+    }
+
     if (this.worker) {
       const staleWorker = this.worker;
       this.worker = null;
@@ -1013,12 +1143,14 @@ export class DocumentScanner {
     }
 
     throwIfScanAborted(signal);
-    this.activeStage = 'initializing_ocr';
-    onProgress?.({
-      stage: 'initializing_ocr',
-      progress: 14,
-      message: 'Initializing client-side Tesseract OCR engine…',
-    });
+    if (onProgress) {
+      this.activeStage = 'initializing_ocr';
+      onProgress({
+        stage: 'initializing_ocr',
+        progress: 14,
+        message: 'Initializing client-side Tesseract OCR engine…',
+      });
+    }
 
     const tesseractWorkerOptions: Record<string, unknown> = {
       logger: this.createLoggerOption('full'),
@@ -1027,6 +1159,7 @@ export class DocumentScanner {
     if (mergedConfig.workerPath) tesseractWorkerOptions.workerPath = mergedConfig.workerPath;
     if (mergedConfig.corePath) tesseractWorkerOptions.corePath = mergedConfig.corePath;
     if (mergedConfig.langPath) tesseractWorkerOptions.langPath = mergedConfig.langPath;
+    if (mergedConfig.langGzip !== undefined) tesseractWorkerOptions.gzip = mergedConfig.langGzip;
     if (mergedConfig.workerBlobURL !== undefined) {
       tesseractWorkerOptions.workerBlobURL = mergedConfig.workerBlobURL;
     }
@@ -1039,20 +1172,28 @@ export class DocumentScanner {
         load_system_dawg: '0',
         load_freq_dawg: '0',
       }
-    ).then((created) => {
-      if (signal?.aborted) {
-        void created.terminate().catch(() => {});
-      }
-      return created;
-    });
+    )
+      .then((created) => {
+        if (signal?.aborted) {
+          void created.terminate().catch(() => {});
+          throw new ScanAbortedError();
+        }
+        this.worker = created;
+        this.workerLang = language;
+        this.workerConfigKey = configKey;
+        return created;
+      })
+      .finally(() => {
+        if (this.workerInitPromise === createPromise) {
+          this.workerInitPromise = null;
+          this.workerInitKey = null;
+        }
+      });
 
-    const worker = await raceWithAbort(createPromise, signal, () => this.abortInFlightWorkers());
-    throwIfScanAborted(signal);
+    this.workerInitPromise = createPromise;
+    this.workerInitKey = initKey;
 
-    this.worker = worker;
-    this.workerLang = language;
-    this.workerConfigKey = configKey;
-    return worker;
+    return raceWithAbort(createPromise, signal, () => this.abortInFlightWorkers());
   }
 
   private async ensureNativeVizWorker(
@@ -1062,12 +1203,15 @@ export class DocumentScanner {
     signal?: AbortSignal
   ): Promise<Worker | null> {
     throwIfScanAborted(signal);
-    this.activeStageCallback = onProgress ?? null;
+    if (onProgress) {
+      this.activeStageCallback = onProgress;
+    }
     const mergedConfig = this.mergeWorkerConfig(workerConfig);
     const configKey = JSON.stringify({
       workerPath: mergedConfig.workerPath,
       corePath: mergedConfig.corePath,
       langPath: mergedConfig.langPath,
+      langGzip: mergedConfig.langGzip,
       workerBlobURL: mergedConfig.workerBlobURL,
     });
 
@@ -1106,6 +1250,7 @@ export class DocumentScanner {
       if (mergedConfig.workerPath) nativeOptions.workerPath = mergedConfig.workerPath;
       if (mergedConfig.corePath) nativeOptions.corePath = mergedConfig.corePath;
       if (mergedConfig.langPath) nativeOptions.langPath = mergedConfig.langPath;
+      if (mergedConfig.langGzip !== undefined) nativeOptions.gzip = mergedConfig.langGzip;
       if (mergedConfig.workerBlobURL !== undefined) {
         nativeOptions.workerBlobURL = mergedConfig.workerBlobURL;
       }
@@ -1140,13 +1285,15 @@ export class DocumentScanner {
   }
 
   private async ensureMrzWorker(
-    fallbackWorker: Worker,
+    fallbackWorker: Worker | null,
     workerConfig: TesseractWorkerConfig,
     onProgress?: (p: ScanProgress) => void,
     signal?: AbortSignal
-  ): Promise<{ worker: Worker; modelUsed: MrzOcrModel }> {
+  ): Promise<{ worker: Worker | null; modelUsed: MrzOcrModel }> {
     throwIfScanAborted(signal);
-    this.activeStageCallback = onProgress ?? null;
+    if (onProgress) {
+      this.activeStageCallback = onProgress;
+    }
     const merged = this.mergeWorkerConfig(workerConfig);
     const requestedModel: MrzOcrModel = merged.mrzModel ?? 'ocrb';
 
@@ -1175,6 +1322,17 @@ export class DocumentScanner {
       return { worker: fallbackWorker, modelUsed: 'standard' };
     }
 
+    if (this.mrzWorkerInitPromise && this.mrzWorkerInitKey === mrzConfigKey) {
+      const resolved = await raceWithAbort(
+        this.mrzWorkerInitPromise,
+        signal,
+        () => this.abortInFlightWorkers()
+      );
+      return resolved.worker
+        ? resolved
+        : { worker: fallbackWorker, modelUsed: 'standard' };
+    }
+
     if (this.mrzWorker) {
       const stale = this.mrzWorker;
       this.mrzWorker = null;
@@ -1182,63 +1340,98 @@ export class DocumentScanner {
       await raceWithAbort(stale.terminate(), signal, () => this.abortInFlightWorkers());
     }
 
-    try {
-      throwIfScanAborted(signal);
+    throwIfScanAborted(signal);
+    if (onProgress) {
       this.activeStage = 'initializing_ocr';
-      onProgress?.({
+      onProgress({
         stage: 'initializing_ocr',
         progress: 16,
         message: 'Loading specialized OCR-B MRZ recognition model…',
       });
+    }
 
-      const mrzOptions: Record<string, unknown> = {
-        langPath: mrzLangPath,
-        gzip: mrzGzip,
-        logger: this.createLoggerOption('mrz'),
-      };
-      if (merged.workerPath) mrzOptions.workerPath = merged.workerPath;
-      if (merged.corePath) mrzOptions.corePath = merged.corePath;
-      if (merged.workerBlobURL !== undefined) {
-        mrzOptions.workerBlobURL = merged.workerBlobURL;
+    const mrzOptions: Record<string, unknown> = {
+      langPath: mrzLangPath,
+      gzip: mrzGzip,
+      logger: this.createLoggerOption('mrz'),
+    };
+    if (merged.workerPath) mrzOptions.workerPath = merged.workerPath;
+    if (merged.corePath) mrzOptions.corePath = merged.corePath;
+    if (merged.workerBlobURL !== undefined) {
+      mrzOptions.workerBlobURL = merged.workerBlobURL;
+    }
+
+    const initPromise: Promise<{ worker: Worker | null; modelUsed: MrzOcrModel }> = createWorker(
+      mrzLang,
+      1,
+      mrzOptions,
+      {
+        load_system_dawg: '0',
+        load_freq_dawg: '0',
       }
-
-      const createPromise = createWorker(
-        mrzLang,
-        1,
-        mrzOptions,
-        {
-          load_system_dawg: '0',
-          load_freq_dawg: '0',
-        }
-      ).then((created) => {
+    )
+      .then((created) => {
         if (signal?.aborted) {
           void created.terminate().catch(() => {});
+          throw new ScanAbortedError();
         }
-        return created;
+        this.mrzWorker = created;
+        this.mrzWorkerConfigKey = mrzConfigKey;
+        this.mrzOcrbFailed = false;
+        return { worker: created as Worker | null, modelUsed: 'ocrb' as MrzOcrModel };
+      })
+      .catch((err) => {
+        if (isScanAbortedError(err)) throw err;
+        this.mrzWorkerConfigKey = mrzConfigKey;
+        this.mrzOcrbFailed = true;
+        return { worker: fallbackWorker, modelUsed: 'standard' as MrzOcrModel };
+      })
+      .finally(() => {
+        if (this.mrzWorkerInitPromise === initPromise) {
+          this.mrzWorkerInitPromise = null;
+          this.mrzWorkerInitKey = null;
+        }
       });
 
-      const worker = await raceWithAbort(createPromise, signal, () => this.abortInFlightWorkers());
-      throwIfScanAborted(signal);
+    this.mrzWorkerInitPromise = initPromise;
+    this.mrzWorkerInitKey = mrzConfigKey;
 
-      this.mrzWorker = worker;
-      this.mrzWorkerConfigKey = mrzConfigKey;
-      this.mrzOcrbFailed = false;
-      return { worker, modelUsed: 'ocrb' };
-    } catch (err) {
-      if (isScanAbortedError(err)) throw err;
-      this.mrzWorkerConfigKey = mrzConfigKey;
-      this.mrzOcrbFailed = true;
-      return { worker: fallbackWorker, modelUsed: 'standard' };
+    const result = await raceWithAbort(initPromise, signal, () => this.abortInFlightWorkers());
+    return result.worker
+      ? result
+      : { worker: fallbackWorker, modelUsed: 'standard' };
+  }
+
+  /**
+   * Pre-warms both the primary Tesseract VIZ worker and the dedicated OCR-B MRZ worker
+   * concurrently before a user drops a file or clicks capture.
+   */
+  async warmup(
+    options: TesseractWorkerConfig & {
+      language?: string;
+      preloadMrz?: boolean;
+      preloadViz?: boolean;
+    } = {}
+  ): Promise<void> {
+    const merged = this.mergeWorkerConfig(options);
+    const vizStrategy = resolveVizPassStrategy({
+      language: options.language ?? 'eng',
+      vizLanguageMode: merged.vizLanguageMode,
+      vizLanguages: merged.vizLanguages,
+    });
+    const tasks: Array<Promise<unknown>> = [];
+    if (options.preloadViz !== false) {
+      tasks.push(this.ensureWorker(vizStrategy.primaryLanguage, merged));
     }
+    if (options.preloadMrz !== false && (merged.mrzModel ?? 'ocrb') !== 'standard') {
+      tasks.push(this.ensureMrzWorker(null, merged));
+    }
+    await Promise.all(tasks);
   }
 
   private async preprocessWithWorkerOrFallback(
     surface: ImageSurface,
-    opts: {
-      preprocess: boolean;
-      rotation: 0 | 90 | 180 | 270;
-      deskewDegrees: number;
-    },
+    opts: PreprocessDocumentOptions,
     useWorker: boolean,
     signal?: AbortSignal
   ): Promise<{ preprocessed: PreprocessedResult; viaWorker: boolean }> {
@@ -1261,17 +1454,22 @@ export class DocumentScanner {
 
   private async runOrientationPass(
     surface: ImageSurface,
-    vizWorker: Worker,
+    primaryLanguage: string,
     workerConfig: TesseractWorkerConfig,
     coarse: 0 | 90 | 180 | 270,
     deskewDegrees: number,
     preprocess: boolean,
     enhanceMrzPass: boolean,
+    skipVizPass: boolean,
+    includePreviews: boolean,
+    needOriginal: boolean,
     useWorkerPreprocess: boolean,
+    prewarmedVizWorker: Worker | null,
+    prewarmedMrzWorker: { worker: Worker | null; modelUsed: MrzOcrModel } | null,
     onProgress?: (p: ScanProgress) => void,
     emitProgress = true,
     signal?: AbortSignal
-  ): Promise<OrientationPassResult> {
+  ): Promise<{ pass: OrientationPassResult; resolvedVizWorker: Worker | null }> {
     throwIfScanAborted(signal);
 
     const { preprocessed, viaWorker } = await this.preprocessWithWorkerOrFallback(
@@ -1280,6 +1478,10 @@ export class DocumentScanner {
         preprocess,
         rotation: coarse,
         deskewDegrees,
+        includePreviews,
+        skipFullPage: skipVizPass,
+        skipMrzStrips: !enhanceMrzPass,
+        needOriginal,
       },
       useWorkerPreprocess,
       signal
@@ -1287,89 +1489,148 @@ export class DocumentScanner {
 
     throwIfScanAborted(signal);
 
+    const vizPromise: Promise<Worker | null> = skipVizPass
+      ? Promise.resolve(prewarmedVizWorker)
+      : prewarmedVizWorker
+        ? Promise.resolve(prewarmedVizWorker)
+        : this.ensureWorker(
+            primaryLanguage,
+            workerConfig,
+            emitProgress ? onProgress : undefined,
+            signal
+          );
+
+    const mrzPromise: Promise<{ worker: Worker | null; modelUsed: MrzOcrModel } | null> =
+      enhanceMrzPass
+        ? prewarmedMrzWorker
+          ? Promise.resolve(prewarmedMrzWorker)
+          : this.ensureMrzWorker(
+              null,
+              workerConfig,
+              emitProgress ? onProgress : undefined,
+              signal
+            )
+        : Promise.resolve(null);
+
+    const [initialVizWorker, initialMrzResolved] = await Promise.all([vizPromise, mrzPromise]);
+    throwIfScanAborted(signal);
+
+    let activeVizWorker: Worker | null = initialVizWorker;
+    let activeMrzWorker: Worker | null = initialMrzResolved?.worker ?? null;
+    let mrzModelUsed: MrzOcrModel =
+      initialMrzResolved?.modelUsed ??
+      workerConfig.mrzModel ??
+      this.defaultWorkerConfig.mrzModel ??
+      'ocrb';
+
+    if (enhanceMrzPass && !activeMrzWorker) {
+      if (!activeVizWorker) {
+        activeVizWorker = await this.ensureWorker(
+          primaryLanguage,
+          workerConfig,
+          emitProgress ? onProgress : undefined,
+          signal
+        );
+      }
+      activeMrzWorker = activeVizWorker;
+      mrzModelUsed = 'standard';
+    }
+
     if (emitProgress) {
-      this.activeStage = 'recognizing_full';
+      this.activeStageCallback = onProgress ?? null;
+      this.activeStage = skipVizPass ? 'recognizing_mrz' : 'recognizing_full';
       onProgress?.({
-        stage: 'recognizing_full',
-        progress: 25,
-        message: 'Reading document text & visual inspection zone…',
+        stage: this.activeStage,
+        progress: skipVizPass ? 45 : 25,
+        message: skipVizPass
+          ? mrzModelUsed === 'ocrb'
+            ? 'Running fast OCR-B MRZ strip recognition…'
+            : 'Running fast MRZ strip recognition…'
+          : 'Reading document text & visual inspection zone…',
       });
     }
 
-    await raceWithAbort(
-      vizWorker.setParameters({
-        tessedit_pageseg_mode: PSM.SPARSE_TEXT,
-        tessedit_char_whitelist: '',
-      }),
-      signal,
-      () => this.abortInFlightWorkers()
-    );
+    const runVizOcr = async () => {
+      if (!activeVizWorker) {
+        return {
+          fullText: '',
+          fullConfidence: 0,
+          vizLineBoxes: [] as VizLineBox[],
+          cleanedFullText: '',
+          pass1Mrz: null as MrzParsedData | null,
+        };
+      }
 
-    const fullInputUrl = preprocess
-      ? preprocessed.enhancedDataUrl
-      : preprocessed.originalDataUrl;
-    let fullResult = await raceWithAbort(
-      vizWorker.recognize(fullInputUrl, {}, { blocks: true }),
-      signal,
-      () => this.abortInFlightWorkers()
-    );
-    let fullText = fullResult.data.text || '';
-    let fullConfidence = fullResult.data.confidence || 0;
-
-    if (fullText.trim().split(/\r?\n/).filter(Boolean).length < 2) {
-      throwIfScanAborted(signal);
       await raceWithAbort(
-        vizWorker.setParameters({
-          tessedit_pageseg_mode: PSM.AUTO,
+        activeVizWorker.setParameters({
+          tessedit_pageseg_mode: PSM.SPARSE_TEXT,
           tessedit_char_whitelist: '',
         }),
         signal,
         () => this.abortInFlightWorkers()
       );
-      const autoResult = await raceWithAbort(
-        vizWorker.recognize(fullInputUrl, {}, { blocks: true }),
+
+      const fullInput = await resolveTesseractInput(
+        preprocess ? preprocessed.enhancedBlob : preprocessed.originalBlob,
+        preprocess ? preprocessed.enhancedDataUrl : preprocessed.originalDataUrl
+      );
+
+      let fullResult = await raceWithAbort(
+        activeVizWorker.recognize(fullInput, {}, { blocks: true }),
         signal,
         () => this.abortInFlightWorkers()
       );
-      if ((autoResult.data.text || '').trim().length > fullText.trim().length) {
-        fullResult = autoResult;
-        fullText = autoResult.data.text || '';
-        fullConfidence = autoResult.data.confidence || 0;
+      let fullText = fullResult.data.text || '';
+      let fullConfidence = fullResult.data.confidence || 0;
+
+      if (fullText.trim().split(/\r?\n/).filter(Boolean).length < 2) {
+        throwIfScanAborted(signal);
+        await raceWithAbort(
+          activeVizWorker.setParameters({
+            tessedit_pageseg_mode: PSM.AUTO,
+            tessedit_char_whitelist: '',
+          }),
+          signal,
+          () => this.abortInFlightWorkers()
+        );
+        const autoResult = await raceWithAbort(
+          activeVizWorker.recognize(fullInput, {}, { blocks: true }),
+          signal,
+          () => this.abortInFlightWorkers()
+        );
+        if ((autoResult.data.text || '').trim().length > fullText.trim().length) {
+          fullResult = autoResult;
+          fullText = autoResult.data.text || '';
+          fullConfidence = autoResult.data.confidence || 0;
+        }
       }
-    }
 
-    const vizLineBoxes = extractVizLineBoxes(fullResult.data.blocks);
-    const cleanedFullText =
-      vizLineBoxes.length > 0 ? vizLineBoxes.map((b) => b.text).join('\n') : fullText;
+      const vizLineBoxes = extractVizLineBoxes(fullResult.data.blocks);
+      const cleanedFullText =
+        vizLineBoxes.length > 0 ? vizLineBoxes.map((b) => b.text).join('\n') : fullText;
+      const pass1Mrz = parseMrzFromText(fullText);
 
-    const candidates: MrzParsedData[] = [];
-    const pass1Mrz = parseMrzFromText(fullText);
-    if (pass1Mrz) candidates.push(pass1Mrz);
+      return {
+        fullText,
+        fullConfidence,
+        vizLineBoxes,
+        cleanedFullText,
+        pass1Mrz,
+      };
+    };
 
-    let mrzRawText = '';
-    let mrzModelUsed: MrzOcrModel =
-      workerConfig.mrzModel ?? this.defaultWorkerConfig.mrzModel ?? 'ocrb';
+    const runMrzOcr = async () => {
+      const mrzCandidates: MrzParsedData[] = [];
+      let mrzRawText = '';
+      let mrzConfSum = 0;
+      let mrzConfCount = 0;
 
-    if (enhanceMrzPass) {
-      throwIfScanAborted(signal);
-      const mrzResolved = await this.ensureMrzWorker(vizWorker, workerConfig, onProgress, signal);
-      const mrzWorker = mrzResolved.worker;
-      mrzModelUsed = mrzResolved.modelUsed;
-
-      if (emitProgress) {
-        this.activeStage = 'recognizing_mrz';
-        onProgress?.({
-          stage: 'recognizing_mrz',
-          progress: 65,
-          message:
-            mrzModelUsed === 'ocrb'
-              ? 'Running dedicated OCR-B MRZ strip verification…'
-              : 'Running high-contrast MRZ strip verification…',
-        });
+      if (!enhanceMrzPass || !activeMrzWorker) {
+        return { mrzCandidates, mrzRawText, mrzConfidence: 0 };
       }
 
       await raceWithAbort(
-        mrzWorker.setParameters({
+        activeMrzWorker.setParameters({
           tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
           tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<',
         }),
@@ -1377,18 +1638,25 @@ export class DocumentScanner {
         () => this.abortInFlightWorkers()
       );
 
-      const runMrzStrip = async (stripUrl: string, stripGray: GrayscaleBuffer) => {
+      const evalMrzStrip = async (
+        stripInput: Blob | string,
+        stripGray: GrayscaleBuffer
+      ) => {
         throwIfScanAborted(signal);
         const mrzResult = await raceWithAbort(
-          mrzWorker.recognize(stripUrl, {}, { blocks: true }),
+          activeMrzWorker!.recognize(stripInput, {}, { blocks: true }),
           signal,
           () => this.abortInFlightWorkers()
         );
         const rawTxt = (mrzResult.data.text || '').trim();
         if (rawTxt && !mrzRawText) mrzRawText = rawTxt;
+        if (typeof mrzResult.data.confidence === 'number' && mrzResult.data.confidence > 0) {
+          mrzConfSum += mrzResult.data.confidence;
+          mrzConfCount++;
+        }
 
         const rawParsed = parseMrzFromText(rawTxt);
-        if (rawParsed) candidates.push(rawParsed);
+        if (rawParsed) mrzCandidates.push(rawParsed);
 
         const reconstructed = reconstructMrzCandidatesFromBlocks(
           mrzResult.data.blocks,
@@ -1397,30 +1665,87 @@ export class DocumentScanner {
 
         if (reconstructed.symbolRepairedText) {
           const symParsed = parseMrzFromText(reconstructed.symbolRepairedText);
-          if (symParsed) candidates.push(symParsed);
+          if (symParsed) mrzCandidates.push(symParsed);
         }
 
         if (reconstructed.gridRepairedText) {
           const gridParsed = parseMrzFromText(reconstructed.gridRepairedText);
           if (gridParsed) {
-            candidates.push(gridParsed);
+            mrzCandidates.push(gridParsed);
             mrzRawText = reconstructed.gridRepairedText;
           }
         }
       };
 
-      await runMrzStrip(preprocessed.mrzCropDataUrl, preprocessed.mrzGrayscale);
+      const tightInput = await resolveTesseractInput(
+        preprocessed.mrzTightCropBlob,
+        preprocessed.mrzTightCropDataUrl
+      );
+      await evalMrzStrip(tightInput, preprocessed.mrzTightGrayscale);
 
-      const hasPerfectMrz = candidates.some((c) => c.allCheckDigitsValid);
-      if (!hasPerfectMrz) {
-        if (emitProgress) {
+      const tightSolved = mrzCandidates.some(isStrongTightMrzCandidate);
+      if (!tightSolved) {
+        const broadInput = await resolveTesseractInput(
+          preprocessed.mrzCropBlob,
+          preprocessed.mrzCropDataUrl
+        );
+        await evalMrzStrip(broadInput, preprocessed.mrzGrayscale);
+      }
+
+      return {
+        mrzCandidates,
+        mrzRawText,
+        mrzConfidence: mrzConfCount > 0 ? mrzConfSum / mrzConfCount : 0,
+      };
+    };
+
+    const canRunConcurrently =
+      !skipVizPass &&
+      enhanceMrzPass &&
+      activeVizWorker !== null &&
+      activeMrzWorker !== null &&
+      activeMrzWorker !== activeVizWorker;
+
+    let fullConfidence = 0;
+    let vizLineBoxes: VizLineBox[] = [];
+    let cleanedFullText = '';
+    const candidates: MrzParsedData[] = [];
+    let mrzRawText = '';
+
+    if (canRunConcurrently) {
+      const [vizOut, mrzOut] = await Promise.all([runVizOcr(), runMrzOcr()]);
+      fullConfidence = vizOut.fullConfidence;
+      vizLineBoxes = vizOut.vizLineBoxes;
+      cleanedFullText = vizOut.cleanedFullText;
+      if (vizOut.pass1Mrz) candidates.push(vizOut.pass1Mrz);
+      candidates.push(...mrzOut.mrzCandidates);
+      mrzRawText = mrzOut.mrzRawText;
+    } else {
+      if (!skipVizPass) {
+        const vizOut = await runVizOcr();
+        fullConfidence = vizOut.fullConfidence;
+        vizLineBoxes = vizOut.vizLineBoxes;
+        cleanedFullText = vizOut.cleanedFullText;
+        if (vizOut.pass1Mrz) candidates.push(vizOut.pass1Mrz);
+      }
+      if (enhanceMrzPass) {
+        if (emitProgress && !skipVizPass) {
+          this.activeStage = 'recognizing_mrz';
           onProgress?.({
             stage: 'recognizing_mrz',
-            progress: 80,
-            message: 'Isolating lower passport MRZ band…',
+            progress: 65,
+            message:
+              mrzModelUsed === 'ocrb'
+                ? 'Running dedicated OCR-B MRZ strip verification…'
+                : 'Running high-contrast MRZ strip verification…',
           });
         }
-        await runMrzStrip(preprocessed.mrzTightCropDataUrl, preprocessed.mrzTightGrayscale);
+        const mrzOut = await runMrzOcr();
+        candidates.push(...mrzOut.mrzCandidates);
+        mrzRawText = mrzOut.mrzRawText;
+        if (skipVizPass) {
+          fullConfidence = mrzOut.mrzConfidence;
+        }
       }
     }
 
@@ -1434,45 +1759,137 @@ export class DocumentScanner {
       mrzData = candidates[0];
     }
 
-    const vizData = parseVizText(cleanedFullText, vizLineBoxes);
+    const vizData = skipVizPass ? emptyVizData() : parseVizText(cleanedFullText, vizLineBoxes);
     const vizFieldCount = countPopulatedVizFields(vizData);
     const probeScore = scoreOrientationPass(mrzData, vizData, fullConfidence, cleanedFullText);
 
-    const isConfidentUpright =
-      (mrzData !== null &&
+    const isConfidentUpright = skipVizPass
+      ? mrzData !== null &&
         (mrzData.allCheckDigitsValid ||
           mrzData.validCount >= 2 ||
-          (mrzData.validCount >= 1 &&
-            Boolean(mrzData.surname || mrzData.documentNumber) &&
-            fullConfidence >= 48))) ||
-      (mrzData === null && fullConfidence >= 65 && vizFieldCount >= 4);
+          (mrzData.validCount >= 1 && Boolean(mrzData.surname || mrzData.documentNumber)))
+      : (mrzData !== null &&
+          (mrzData.allCheckDigitsValid ||
+            mrzData.validCount >= 2 ||
+            (mrzData.validCount >= 1 &&
+              Boolean(mrzData.surname || mrzData.documentNumber) &&
+              fullConfidence >= 48))) ||
+        (mrzData === null && fullConfidence >= 65 && vizFieldCount >= 4);
 
     return {
-      coarse,
-      preprocessed,
-      usedWorkerPreprocess: viaWorker,
-      cleanedFullText,
-      vizLineBoxes,
-      vizData,
-      mrzData,
-      mrzRawText,
-      mrzModelUsed,
-      confidence: fullConfidence,
-      probeScore,
-      isConfidentUpright,
+      pass: {
+        coarse,
+        preprocessed,
+        usedWorkerPreprocess: viaWorker,
+        cleanedFullText,
+        vizLineBoxes,
+        vizData,
+        mrzData,
+        mrzRawText,
+        mrzModelUsed,
+        confidence: fullConfidence,
+        probeScore,
+        isConfidentUpright,
+      },
+      resolvedVizWorker: activeVizWorker,
     };
   }
 
   private async runLightweightProbe(
     surface: ImageSurface,
-    worker: Worker,
+    vizWorker: Worker | null,
+    mrzWorker: Worker | null,
     coarse: 0 | 90 | 180 | 270,
     deskewDegrees: number,
     preprocess: boolean,
     useWorkerPreprocess: boolean,
+    mrzStripOnlyMode: boolean,
     signal?: AbortSignal
-  ): Promise<{ score: number; viaWorker: boolean }> {
+  ): Promise<{ score: number; earlyExit: boolean; viaWorker: boolean }> {
     throwIfScanAborted(signal);
+
+    if (mrzStripOnlyMode && mrzWorker) {
+      const { preprocessed, viaWorker } = await this.preprocessWithWorkerOrFallback(
+        surface,
+        {
+          preprocess,
+          rotation: coarse,
+          deskewDegrees,
+          includePreviews: false,
+          skipFullPage: true,
+          skipMrzStrips: false,
+          needOriginal: false,
+        },
+        useWorkerPreprocess,
+        signal
+      );
+
+      await raceWithAbort(
+        mrzWorker.setParameters({
+          tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
+          tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<',
+        }),
+        signal,
+        () => this.abortInFlightWorkers()
+      );
+
+      const probeStrip = async (input: Blob | string, gray: GrayscaleBuffer) => {
+        const res = await raceWithAbort(
+          mrzWorker.recognize(input, {}, { blocks: true }),
+          signal,
+          () => this.abortInFlightWorkers()
+        );
+        const rawTxt = (res.data.text || '').trim();
+        const found: MrzParsedData[] = [];
+        const p1 = parseMrzFromText(rawTxt);
+        if (p1) found.push(p1);
+        const recon = reconstructMrzCandidatesFromBlocks(res.data.blocks, gray);
+        if (recon.symbolRepairedText) {
+          const p2 = parseMrzFromText(recon.symbolRepairedText);
+          if (p2) found.push(p2);
+        }
+        if (recon.gridRepairedText) {
+          const p3 = parseMrzFromText(recon.gridRepairedText);
+          if (p3) found.push(p3);
+        }
+        found.sort((a, b) => scoreMrzCandidate(b) - scoreMrzCandidate(a));
+        return {
+          mrz: found[0] ?? null,
+          conf: res.data.confidence || 0,
+        };
+      };
+
+      const tightInput = await resolveTesseractInput(
+        preprocessed.mrzTightCropBlob,
+        preprocessed.mrzTightCropDataUrl
+      );
+      let bestProbe = await probeStrip(tightInput, preprocessed.mrzTightGrayscale);
+      if (!bestProbe.mrz || !bestProbe.mrz.allCheckDigitsValid) {
+        const broadInput = await resolveTesseractInput(
+          preprocessed.mrzCropBlob,
+          preprocessed.mrzCropDataUrl
+        );
+        const broadProbe = await probeStrip(broadInput, preprocessed.mrzGrayscale);
+        if (
+          broadProbe.mrz &&
+          (!bestProbe.mrz ||
+            scoreMrzCandidate(broadProbe.mrz) > scoreMrzCandidate(bestProbe.mrz))
+        ) {
+          bestProbe = broadProbe;
+        }
+      }
+
+      const score = scoreOrientationPass(bestProbe.mrz, emptyVizData(), bestProbe.conf, '');
+      return {
+        score,
+        earlyExit: Boolean(bestProbe.mrz?.allCheckDigitsValid || score >= 240),
+        viaWorker,
+      };
+    }
+
+    if (!vizWorker) {
+      return { score: 0, earlyExit: false, viaWorker: false };
+    }
 
     const { preprocessed, viaWorker } = await this.preprocessWithWorkerOrFallback(
       surface,
@@ -1480,13 +1897,17 @@ export class DocumentScanner {
         preprocess,
         rotation: coarse,
         deskewDegrees,
+        includePreviews: false,
+        skipFullPage: false,
+        skipMrzStrips: true,
+        needOriginal: !preprocess,
       },
       useWorkerPreprocess,
       signal
     );
 
     await raceWithAbort(
-      worker.setParameters({
+      vizWorker.setParameters({
         tessedit_pageseg_mode: PSM.SPARSE_TEXT,
         tessedit_char_whitelist: '',
       }),
@@ -1494,9 +1915,12 @@ export class DocumentScanner {
       () => this.abortInFlightWorkers()
     );
 
-    const inputUrl = preprocess ? preprocessed.enhancedDataUrl : preprocessed.originalDataUrl;
+    const input = await resolveTesseractInput(
+      preprocess ? preprocessed.enhancedBlob : preprocessed.originalBlob,
+      preprocess ? preprocessed.enhancedDataUrl : preprocessed.originalDataUrl
+    );
     const res = await raceWithAbort(
-      worker.recognize(inputUrl, {}, { blocks: true }),
+      vizWorker.recognize(input, {}, { blocks: true }),
       signal,
       () => this.abortInFlightWorkers()
     );
@@ -1506,9 +1930,11 @@ export class DocumentScanner {
     const cleaned = boxes.length > 0 ? boxes.map((b) => b.text).join('\n') : rawText;
     const viz = parseVizText(cleaned, boxes);
     const mrz = parseMrzFromText(rawText);
+    const score = scoreOrientationPass(mrz, viz, conf, cleaned);
 
     return {
-      score: scoreOrientationPass(mrz, viz, conf, cleaned),
+      score,
+      earlyExit: Boolean(mrz?.allCheckDigitsValid || score >= 240),
       viaWorker,
     };
   }
@@ -1519,9 +1945,9 @@ export class DocumentScanner {
       language = 'eng',
       preprocess = true,
       enhanceMrzPass = true,
+      mrzOnly = false,
+      skipVizPass: skipVizOption = false,
       enableBarcodePass = true,
-      extractPortrait = true,
-      extractSignature = true,
       detectSpecimen = true,
       perspectiveCorrection = true,
       corners: manualCorners,
@@ -1535,6 +1961,7 @@ export class DocumentScanner {
       workerPath,
       corePath,
       langPath,
+      langGzip,
       workerBlobURL,
       useWorkerPreprocessing,
       mrzModel,
@@ -1547,12 +1974,18 @@ export class DocumentScanner {
       onProgress,
     } = options;
 
+    const effectiveEnhanceMrz = Boolean(enhanceMrzPass || mrzOnly);
+    const skipViz = Boolean(mrzOnly || skipVizOption);
+    const extractPortrait = options.extractPortrait ?? !mrzOnly;
+    const extractSignature = options.extractSignature ?? !mrzOnly;
+
     throwIfScanAborted(signal);
 
     const workerConfig = this.mergeWorkerConfig({
       workerPath,
       corePath,
       langPath,
+      langGzip,
       workerBlobURL,
       useWorkerPreprocessing,
       mrzModel,
@@ -1578,14 +2011,43 @@ export class DocumentScanner {
         ? options.autoRotate
         : rotation === 0 && manualDeskew === 0;
 
+    let vizWarmupPromise = null as Promise<Worker> | null;
+    let mrzWarmupPromise = null as Promise<{ worker: Worker | null; modelUsed: MrzOcrModel }> | null;
+
+    const startWorkerPrewarm = () => {
+      if (!skipViz && !vizWarmupPromise) {
+        vizWarmupPromise = this.ensureWorker(
+          vizStrategy.primaryLanguage,
+          workerConfig,
+          undefined,
+          signal
+        );
+        vizWarmupPromise.catch(() => {});
+      }
+      if (
+        effectiveEnhanceMrz &&
+        (workerConfig.mrzModel ?? 'ocrb') !== 'standard' &&
+        !mrzWarmupPromise
+      ) {
+        mrzWarmupPromise = this.ensureMrzWorker(null, workerConfig, undefined, signal);
+        mrzWarmupPromise.catch(() => {});
+      }
+    };
+
+    if (!enforceQualityGate) {
+      startWorkerPrewarm();
+    }
+
     onProgress?.({
       stage: 'preprocessing',
       progress: 4,
-      message: perspectiveCorrection || manualCorners
-        ? 'Decoding document & checking 4-corner perspective…'
-        : autoRotate
-          ? 'Decoding document & analyzing orientation…'
-          : 'Preprocessing image & isolating MRZ region…',
+      message: mrzOnly
+        ? 'Decoding document for fast MRZ extraction…'
+        : perspectiveCorrection || manualCorners
+          ? 'Decoding document & checking 4-corner perspective…'
+          : autoRotate
+            ? 'Decoding document & analyzing orientation…'
+            : 'Preprocessing image & isolating MRZ region…',
     });
 
     let ownedBitmap: ImageBitmap | null = null;
@@ -1706,6 +2168,8 @@ export class DocumentScanner {
         }
       }
 
+      startWorkerPrewarm();
+
       let deskewDegrees = manualDeskew;
       let candidateOrder: Array<0 | 90 | 180 | 270> = [rotation];
 
@@ -1755,31 +2219,54 @@ export class DocumentScanner {
       }
 
       throwIfScanAborted(signal);
-      const worker = await this.ensureWorker(
-        vizStrategy.primaryLanguage,
-        workerConfig,
-        onProgress,
-        signal
-      );
 
-      let bestPass = await this.runOrientationPass(
+      const prewarmedVizWorker: Worker | null = vizWarmupPromise ? await vizWarmupPromise : null;
+      const prewarmedMrzWorker: { worker: Worker | null; modelUsed: MrzOcrModel } | null =
+        mrzWarmupPromise ? await mrzWarmupPromise : null;
+
+      throwIfScanAborted(signal);
+
+      const needOriginalForMediaOrPreview =
+        includePreviews ||
+        extractPortrait ||
+        extractSignature ||
+        (detectSpecimen && !skipViz);
+
+      const firstRun = await this.runOrientationPass(
         workingSurface,
-        worker,
+        vizStrategy.primaryLanguage,
         workerConfig,
         candidateOrder[0],
         deskewDegrees,
         preprocess,
-        enhanceMrzPass,
+        effectiveEnhanceMrz,
+        skipViz,
+        includePreviews,
+        needOriginalForMediaOrPreview,
         useWorker,
+        prewarmedVizWorker,
+        prewarmedMrzWorker,
         onProgress,
         true,
         signal
       );
+      let bestPass = firstRun.pass;
+      let activeVizWorker = firstRun.resolvedVizWorker;
       if (bestPass.usedWorkerPreprocess) usedWorkerPreprocessing = true;
 
       if (autoRotate && !bestPass.isConfidentUpright && !barcodeData?.aamva) {
         let bestProbeRot = bestPass.coarse;
         let bestProbeScore = bestPass.probeScore;
+
+        const mrzProbeWorker =
+          skipViz && effectiveEnhanceMrz
+            ? (prewarmedMrzWorker?.worker ?? this.mrzWorker ?? activeVizWorker)
+            : null;
+        const vizProbeWorker =
+          !skipViz
+            ? (activeVizWorker ??
+              (await this.ensureWorker(vizStrategy.primaryLanguage, workerConfig, onProgress, signal)))
+            : null;
 
         for (let idx = 1; idx < candidateOrder.length; idx++) {
           throwIfScanAborted(signal);
@@ -1792,11 +2279,13 @@ export class DocumentScanner {
 
           const probe = await this.runLightweightProbe(
             workingSurface,
-            worker,
+            vizProbeWorker,
+            mrzProbeWorker,
             rot,
             deskewDegrees,
             preprocess,
             useWorker,
+            Boolean(skipViz && effectiveEnhanceMrz && mrzProbeWorker),
             signal
           );
           if (probe.viaWorker) usedWorkerPreprocessing = true;
@@ -1804,7 +2293,7 @@ export class DocumentScanner {
           if (probe.score > bestProbeScore) {
             bestProbeScore = probe.score;
             bestProbeRot = rot;
-            if (probe.score >= 240) {
+            if (probe.earlyExit) {
               break;
             }
           }
@@ -1812,34 +2301,42 @@ export class DocumentScanner {
 
         if (bestProbeRot !== bestPass.coarse) {
           throwIfScanAborted(signal);
-          bestPass = await this.runOrientationPass(
+          const rerun = await this.runOrientationPass(
             workingSurface,
-            worker,
+            vizStrategy.primaryLanguage,
             workerConfig,
             bestProbeRot,
             deskewDegrees,
             preprocess,
-            enhanceMrzPass,
+            effectiveEnhanceMrz,
+            skipViz,
+            includePreviews,
+            needOriginalForMediaOrPreview,
             useWorker,
+            activeVizWorker,
+            prewarmedMrzWorker,
             onProgress,
             false,
             signal
           );
+          bestPass = rerun.pass;
+          if (!activeVizWorker) activeVizWorker = rerun.resolvedVizWorker;
           if (bestPass.usedWorkerPreprocess) usedWorkerPreprocessing = true;
         }
       }
 
       throwIfScanAborted(signal);
 
-      const { preprocessed, mrzData, mrzRawText, mrzModelUsed } = bestPass;
+      const { preprocessed, mrzRawText, mrzModelUsed } = bestPass;
+      let mrzData = bestPass.mrzData;
       let cleanedFullText = bestPass.cleanedFullText;
       let vizData = bestPass.vizData;
       let activeVizLineBoxes = bestPass.vizLineBoxes;
       let confidence = bestPass.confidence;
-      let activeVizLanguage = vizStrategy.primaryLanguage;
+      let activeVizLanguage = skipViz ? mrzModelUsed : vizStrategy.primaryLanguage;
       const effectiveVizMode: VizLanguageMode = vizStrategy.effectiveMode;
 
-      if (vizStrategy.allowAutoFollowUp) {
+      if (!skipViz && vizStrategy.allowAutoFollowUp) {
         const targetNativeLang = resolveNativeVizLanguage({
           issuingCountry:
             mrzData?.issuingCountry ??
@@ -1878,11 +2375,12 @@ export class DocumentScanner {
                 () => this.abortInFlightWorkers()
               );
 
-              const fullInputUrl = preprocess
-                ? preprocessed.enhancedDataUrl
-                : preprocessed.originalDataUrl;
+              const fullInput = await resolveTesseractInput(
+                preprocess ? preprocessed.enhancedBlob : preprocessed.originalBlob,
+                preprocess ? preprocessed.enhancedDataUrl : preprocessed.originalDataUrl
+              );
               let nativeResult = await raceWithAbort(
-                nativeWorker.recognize(fullInputUrl, {}, { blocks: true }),
+                nativeWorker.recognize(fullInput, {}, { blocks: true }),
                 signal,
                 () => this.abortInFlightWorkers()
               );
@@ -1900,7 +2398,7 @@ export class DocumentScanner {
                   () => this.abortInFlightWorkers()
                 );
                 const autoNative = await raceWithAbort(
-                  nativeWorker.recognize(fullInputUrl, {}, { blocks: true }),
+                  nativeWorker.recognize(fullInput, {}, { blocks: true }),
                   signal,
                   () => this.abortInFlightWorkers()
                 );
@@ -1940,32 +2438,50 @@ export class DocumentScanner {
       onProgress?.({
         stage: 'parsing',
         progress: 94,
-        message: 'Cropping portrait & signature, validating MRZ/VIZ & watermarks…',
+        message: mrzOnly
+          ? 'Validating MRZ fields & specimen markers…'
+          : 'Cropping portrait & signature, validating MRZ/VIZ & watermarks…',
       });
 
       const documentType = inferDocumentType(mrzData, barcodeData, vizData.documentTypeHint);
-      const crossValidation = crossValidateMrzAndViz(mrzData, vizData);
+      const crossValidation = crossValidateMrzAndViz(mrzData, skipViz ? null : vizData);
+
+      // Reconcile unsplit MRZ name fields (missing `<<` separator) using confirmed VIZ boundary
+      const reconciledSplit = mrzData ? matchUnsplitMrzNameWithViz(mrzData, vizData) : null;
+      if (mrzData && reconciledSplit) {
+        mrzData = {
+          ...mrzData,
+          surname: reconciledSplit.surname,
+          surnames: reconciledSplit.surnames,
+          givenNames: reconciledSplit.givenNames,
+          givenNamesList: reconciledSplit.givenNamesList,
+        };
+      }
 
       let portraitRegion: CroppedRegionInfo | null = null;
       let signatureRegion: CroppedRegionInfo | null = null;
       let watermarkProbeCanvas: HTMLCanvasElement | null = null;
 
-      if (extractPortrait || extractSignature || detectSpecimen) {
-        const media = await raceWithAbort(
-          extractPortraitAndSignature(preprocessed.originalDataUrl, {
-            documentType,
-            mrz: mrzData,
-            barcode: barcodeData,
-            vizLineBoxes: activeVizLineBoxes,
-            extractPortrait,
-            extractSignature,
-            checkColoredWatermark: detectSpecimen,
-          }),
-          signal
-        );
-        portraitRegion = media.portrait;
-        signatureRegion = media.signature;
-        watermarkProbeCanvas = media.watermarkProbeCanvas ?? null;
+      const checkColoredWatermark = detectSpecimen && !skipViz;
+      if (extractPortrait || extractSignature || checkColoredWatermark) {
+        const mediaSource = preprocessed.originalBlob ?? preprocessed.originalDataUrl;
+        if (mediaSource) {
+          const media = await raceWithAbort(
+            extractPortraitAndSignature(mediaSource, {
+              documentType,
+              mrz: mrzData,
+              barcode: barcodeData,
+              vizLineBoxes: activeVizLineBoxes,
+              extractPortrait,
+              extractSignature,
+              checkColoredWatermark,
+            }),
+            signal
+          );
+          portraitRegion = media.portrait;
+          signatureRegion = media.signature;
+          watermarkProbeCanvas = media.watermarkProbeCanvas ?? null;
+        }
       }
 
       throwIfScanAborted(signal);
@@ -1981,21 +2497,26 @@ export class DocumentScanner {
           unmappedFields: vizData.unmappedKeyValues,
         });
 
-        // If no watermark found in main OCR text and a red/colored stamp overlay was spotted,
-        // run a fast deskewed stamp-mask OCR check on the already-warm worker.
         if (!specimenResult.isSpecimen && watermarkProbeCanvas) {
           try {
             throwIfScanAborted(signal);
+            const stampWorker =
+              activeVizWorker ??
+              (await this.ensureWorker(vizStrategy.primaryLanguage, workerConfig, undefined, signal));
             await raceWithAbort(
-              worker.setParameters({
+              stampWorker.setParameters({
                 tessedit_pageseg_mode: PSM.SPARSE_TEXT,
                 tessedit_char_whitelist: '',
               }),
               signal,
               () => this.abortInFlightWorkers()
             );
+            const stampInput = await resolveTesseractInput(
+              undefined,
+              watermarkProbeCanvas.toDataURL('image/png')
+            );
             const stampRes = await raceWithAbort(
-              worker.recognize(watermarkProbeCanvas),
+              stampWorker.recognize(stampInput),
               signal,
               () => this.abortInFlightWorkers()
             );
@@ -2034,10 +2555,13 @@ export class DocumentScanner {
         fieldSources
       );
 
+      const vizSurnameCandidate =
+        vizData.surname ??
+        enrichAsciiNameFromNativeText(mrzData?.surname, cleanedFullText);
       const surname = pickSingleSideName(
         mrzData?.surname,
         aamva?.surname,
-        vizData.surname,
+        vizSurnameCandidate,
         'surname',
         fieldSources
       );
@@ -2054,10 +2578,13 @@ export class DocumentScanner {
                   ? surname.split(/\s+/).filter(Boolean)
                   : [];
 
+      const vizGivenCandidate =
+        vizData.givenNames ??
+        enrichAsciiNameFromNativeText(mrzData?.givenNames, cleanedFullText);
       const givenNames = pickSingleSideName(
         mrzData?.givenNames,
         aamva?.givenNames,
-        vizData.givenNames,
+        vizGivenCandidate,
         'givenNames',
         fieldSources
       );
@@ -2339,6 +2866,11 @@ export class DocumentScanner {
 
   async terminate(): Promise<void> {
     this.preprocessWorker.terminate();
+    this.workerInitPromise = null;
+    this.workerInitKey = null;
+    this.mrzWorkerInitPromise = null;
+    this.mrzWorkerInitKey = null;
+
     if (this.worker) {
       await this.worker.terminate();
       this.worker = null;
@@ -2369,6 +2901,7 @@ export async function scanDocumentImage(
     workerPath: options.workerPath,
     corePath: options.corePath,
     langPath: options.langPath,
+    langGzip: options.langGzip,
     workerBlobURL: options.workerBlobURL,
     useWorkerPreprocessing: options.useWorkerPreprocessing,
     mrzModel: options.mrzModel,
@@ -2395,6 +2928,7 @@ export async function scanDocumentPair(
     workerPath: options.workerPath,
     corePath: options.corePath,
     langPath: options.langPath,
+    langGzip: options.langGzip,
     workerBlobURL: options.workerBlobURL,
     useWorkerPreprocessing: options.useWorkerPreprocessing,
     mrzModel: options.mrzModel,

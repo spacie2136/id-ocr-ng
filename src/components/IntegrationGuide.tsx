@@ -18,6 +18,9 @@ const UMD_SNIPPET = `<!-- Always use the latest build via GitHub + jsDelivr (or 
     useWorkerPreprocessing: true, // default: OffscreenCanvas worker (shadow-resilient VIZ & dynamic MRZ framing)
   });
 
+  // Optional: pre-warm VIZ + OCR-B WASM workers while opening the camera or upload screen
+  void scanner.warmup();
+
   // Live camera auto-capture locked to the visible viewfinder crop (object-cover safe on phones)
   let activeController = null;
   const watcher = watchCameraAutoCapture(videoElement, {
@@ -132,6 +135,9 @@ const scanner = new DocumentScanner({
   vizLanguageMode: 'auto',
 });
 
+// Pre-warm both VIZ & OCR-B Tesseract workers concurrently before user uploads/captures
+await scanner.warmup();
+
 // 1. Mobile-calibrated live <video> auto-capture + AbortController scan cancellation
 let abortController: AbortController | null = null;
 
@@ -168,12 +174,15 @@ const specimenCheck = detectSpecimenWatermark({ rawOcrText: ocrText, mrz: consen
 const mrzVizAudit = crossValidateMrzAndViz(consensusMrz, viz);
 console.log(aamva?.fullName, specimenCheck.isSpecimen, mrzVizAudit.discrepancies);
 
-// 3. Disable portrait/signature cropping or worker preprocessing per scan
-const minimalScan = await scanner.scan(uploadedFile, {
-  useWorkerPreprocessing: false,
-  extractPortrait: false,
+// 3. Fast MRZ-Only mode (skips full-page VIZ OCR & media crops) or skipVizPass with portrait crop
+const fastMrz = await scanner.scan(uploadedFile, {
+  mrzOnly: true,
+  includePreviews: false,
+});
+const mrzAndPortrait = await scanner.scan(uploadedFile, {
+  skipVizPass: true,
+  extractPortrait: true,
   extractSignature: false,
-  vizLanguageMode: 'multilingual',
 });`;
 
 const MODULES = [
@@ -187,7 +196,7 @@ const MODULES = [
   },
   {
     name: 'preprocessWorker.ts',
-    role: 'Self-contained OffscreenCanvas + ImageBitmap Web Worker client (PreprocessWorkerClient) offloading 2400px perspective homography, shadow illumination flattening, dynamic MRZ band detection, and flat-field MRZ strips off the main thread, plus AbortSignal helpers.',
+    role: 'Self-contained OffscreenCanvas + ImageBitmap Web Worker client (PreprocessWorkerClient) offloading 2400px perspective homography, shadow illumination flattening, dynamic MRZ band detection, and zero-base64 PNG Blob + transferable grayscale strips off the main thread, plus AbortSignal helpers.',
   },
   {
     name: 'pdf417Decoder.ts & aamvaParser.ts',
@@ -199,7 +208,7 @@ const MODULES = [
   },
   {
     name: 'ocrEngine.ts & vizLanguages.ts',
-    role: 'Multi-worker Tesseract.js + PDF417 orchestration, consensus MRZ voting, OffscreenCanvas preprocessing dispatch, portrait/signature crop & watermark probe, single-side MRZ↔VIZ cross-validation, AbortSignal termination, native VIZ pass, and scanPair().',
+    role: 'Concurrent VIZ + OCR-B worker pre-warming (scanner.warmup()), parallel VIZ+MRZ execution, binary Blob Tesseract transfers, tight-strip-first MRZ recognition, fast mrzOnly / skipVizPass modes, early-exit orientation probes, OffscreenCanvas dispatch, portrait/signature crop & watermark probe, and scanPair().',
   },
   {
     name: 'perspective.ts',
@@ -215,7 +224,7 @@ const MODULES = [
   },
   {
     name: 'imagePreprocessor.ts',
-    role: 'Main-thread HTMLCanvasElement fallback + transferable ImageBitmap loader with 16×12 shadow illumination flattening, dynamic monospace MRZ band localization, and flat-field MRZ isolation.',
+    role: 'Main-thread HTMLCanvasElement fallback + transferable ImageBitmap loader with 16×12 shadow illumination flattening, dynamic monospace MRZ band localization, skipFullPage/skipMrzStrips fast paths, and flat-field MRZ isolation.',
   },
   {
     name: 'mrzParser.ts & vizParser.ts',
@@ -340,7 +349,7 @@ export const IntegrationGuide: React.FC = () => {
             <div className="flex items-center gap-2">
               <Globe className="w-4 h-4 text-blue-600" />
               <h3 className="text-sm font-semibold text-slate-900">
-                01. Remote Website &lt;script&gt; + Portrait/Signature Crop &amp; Specimen Detection (v{SCANNER_VERSION})
+                01. Remote Website &lt;script&gt; + Worker Warmup &amp; Specimen Detection (v{SCANNER_VERSION})
               </h3>
             </div>
             <button
@@ -402,7 +411,7 @@ export const IntegrationGuide: React.FC = () => {
             <div className="flex items-center gap-2">
               <Terminal className="w-4 h-4 text-blue-600" />
               <h3 className="text-sm font-semibold text-slate-900">
-                03. Standalone Validation, AAMVA Parser &amp; Consensus Helpers
+                03. Standalone Validation, Fast MRZ-Only &amp; Consensus Helpers
               </h3>
             </div>
             <button

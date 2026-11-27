@@ -14,8 +14,8 @@ export interface ExtractedDocumentMedia {
     watermarkProbeCanvas?: HTMLCanvasElement | null;
 }
 /**
- * Pure RGBA buffer portrait region detector. Exposed for deterministic unit testing
- * in both browser and Node.js environments.
+ * Pure RGBA buffer portrait region detector. Automatically scales inputs wider than
+ * `WORK_WIDTH` down to canonical resolution so results are identical across full-size and mobile captures.
  */
 export declare function detectPortraitBoundsFromRgba(rgba: Uint8ClampedArray, w: number, h: number, options?: {
     mrz?: MrzParsedData | null;
@@ -53,4 +53,4 @@ export declare function buildColoredWatermarkOcrCanvas(sourceCanvas: HTMLCanvasE
  * Extracts cropped portrait (`portraitDataUrl`), holder signature (`signatureDataUrl`),
  * and optional red-stamp watermark probe canvas from an upright, deskewed document image.
  */
-export declare function extractPortraitAndSignature(imageSource: string | ImageSurface, options?: ExtractMediaOptions): Promise<ExtractedDocumentMedia>;
+export declare function extractPortraitAndSignature(imageSource: string | Blob | ImageSurface, options?: ExtractMediaOptions): Promise<ExtractedDocumentMedia>;

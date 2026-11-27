@@ -427,8 +427,10 @@ export interface TesseractWorkerConfig {
   workerPath?: string;
   /** Custom URL/path to Tesseract WASM core directory */
   corePath?: string;
-  /** Custom URL/path to directory containing *.traineddata.gz files */
+  /** Custom URL/path to directory containing *.traineddata(.gz) files */
   langPath?: string;
+  /** Whether VIZ traineddata files at langPath are .gz compressed (defaults to Tesseract.js default true) */
+  langGzip?: boolean;
   /** Set false when loading workerPath directly without wrapping in a Blob URL */
   workerBlobURL?: boolean;
   /** Offload perspective warp & grayscale/MRZ preprocessing to a Web Worker with OffscreenCanvas when available (default: true) */
@@ -456,11 +458,21 @@ export interface ScannerOptions extends TesseractWorkerConfig {
   preprocess?: boolean;
   /** Run a dedicated high-contrast MRZ bottom-strip OCR pass (default: true) */
   enhanceMrzPass?: boolean;
+  /**
+   * Fast MRZ-only scan mode: skips full-page VIZ OCR & native-script follow-up passes,
+   * running only cropped MRZ strip recognition (default: false).
+   */
+  mrzOnly?: boolean;
+  /**
+   * Skip full-page VIZ OCR & native-script follow-up passes while still running MRZ strip OCR
+   * and (unless disabled) PDF417 barcode decoding (default: false).
+   */
+  skipVizPass?: boolean;
   /** Scan for PDF417 / AAMVA 2D barcodes via native BarcodeDetector + ZXing fallback (default: true) */
   enableBarcodePass?: boolean;
-  /** Extract and return a cropped PNG portrait data URL (`portraitDataUrl`) from the upright document (default: true) */
+  /** Extract and return a cropped PNG portrait data URL (`portraitDataUrl`) from the upright document (default: true, or false when mrzOnly is true unless explicitly set) */
   extractPortrait?: boolean;
-  /** Extract and return a cropped PNG holder signature data URL (`signatureDataUrl`) when present (default: true) */
+  /** Extract and return a cropped PNG holder signature data URL (`signatureDataUrl`) when present (default: true, or false when mrzOnly is true unless explicitly set) */
   extractSignature?: boolean;
   /** Flag specimen / sample / void watermarks & reserved ICAO test codes (`specimen`) (default: true) */
   detectSpecimen?: boolean;
@@ -510,6 +522,11 @@ export interface PreprocessedResult {
   mrzTightGrayscale: GrayscaleBuffer;
   width: number;
   height: number;
+  /** Lightweight binary PNG Blobs for zero-base64 Tesseract worker transfers */
+  originalBlob?: Blob;
+  enhancedBlob?: Blob;
+  mrzCropBlob?: Blob;
+  mrzTightCropBlob?: Blob;
 }
 
 export type ImageSurface = HTMLImageElement | HTMLCanvasElement | ImageBitmap;

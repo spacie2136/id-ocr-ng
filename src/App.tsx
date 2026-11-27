@@ -43,6 +43,7 @@ export default function App() {
   const [manualCorners, setManualCorners] = useState<DocumentQuad | null>(null);
   const [preprocess, setPreprocess] = useState(true);
   const [enhanceMrzPass, setEnhanceMrzPass] = useState(true);
+  const [mrzOnly, setMrzOnly] = useState(false);
   const [enableBarcodePass, setEnableBarcodePass] = useState(true);
   const [extractMedia, setExtractMedia] = useState(true);
   const [mrzModel, setMrzModel] = useState<MrzOcrModel>('ocrb');
@@ -104,6 +105,7 @@ export default function App() {
         corners: DocumentQuad | null;
         prep: boolean;
         mrzPass: boolean;
+        mrzOnly: boolean;
         barcodePass: boolean;
         mediaCrop: boolean;
         mrzModel: MrzOcrModel;
@@ -134,10 +136,11 @@ export default function App() {
           vizLanguageMode: opts.vizMode,
           vizLanguages: opts.customViz,
           preprocess: opts.prep,
-          enhanceMrzPass: opts.mrzPass,
+          enhanceMrzPass: opts.mrzPass || opts.mrzOnly,
+          mrzOnly: opts.mrzOnly,
           enableBarcodePass: opts.barcodePass,
-          extractPortrait: opts.mediaCrop,
-          extractSignature: opts.mediaCrop,
+          extractPortrait: opts.mrzOnly ? false : opts.mediaCrop,
+          extractSignature: opts.mrzOnly ? false : opts.mediaCrop,
           detectSpecimen: true,
           perspectiveCorrection: opts.persp,
           corners: opts.corners ?? undefined,
@@ -203,6 +206,7 @@ export default function App() {
         persp: boolean;
         prep: boolean;
         mrzPass: boolean;
+        mrzOnly: boolean;
         barcodePass: boolean;
         mediaCrop: boolean;
         mrzModel: MrzOcrModel;
@@ -233,10 +237,11 @@ export default function App() {
           vizLanguageMode: opts.vizMode,
           vizLanguages: opts.customViz,
           preprocess: opts.prep,
-          enhanceMrzPass: opts.mrzPass,
+          enhanceMrzPass: opts.mrzPass || opts.mrzOnly,
+          mrzOnly: opts.mrzOnly,
           enableBarcodePass: opts.barcodePass,
-          extractPortrait: opts.mediaCrop,
-          extractSignature: opts.mediaCrop,
+          extractPortrait: opts.mrzOnly ? false : opts.mediaCrop,
+          extractSignature: opts.mrzOnly ? false : opts.mediaCrop,
           detectSpecimen: true,
           perspectiveCorrection: opts.persp,
           autoRotate: opts.autoRot,
@@ -320,6 +325,7 @@ export default function App() {
       corners: null,
       prep: preprocess,
       mrzPass: enhanceMrzPass,
+      mrzOnly,
       barcodePass: enableBarcodePass,
       mediaCrop: extractMedia,
       mrzModel,
@@ -359,6 +365,7 @@ export default function App() {
           persp: perspectiveCorrection,
           prep: preprocess,
           mrzPass: enhanceMrzPass,
+          mrzOnly,
           barcodePass: enableBarcodePass,
           mediaCrop: extractMedia,
           mrzModel,
@@ -376,6 +383,7 @@ export default function App() {
           persp: perspectiveCorrection,
           prep: preprocess,
           mrzPass: enhanceMrzPass,
+          mrzOnly,
           barcodePass: enableBarcodePass,
           mediaCrop: extractMedia,
           mrzModel,
@@ -428,6 +436,7 @@ export default function App() {
         persp: perspectiveCorrection,
         prep: preprocess,
         mrzPass: enhanceMrzPass,
+        mrzOnly,
         barcodePass: enableBarcodePass,
         mediaCrop: extractMedia,
         mrzModel,
@@ -445,6 +454,7 @@ export default function App() {
       corners: manualCorners,
       prep: preprocess,
       mrzPass: enhanceMrzPass,
+      mrzOnly,
       barcodePass: enableBarcodePass,
       mediaCrop: extractMedia,
       mrzModel,
@@ -569,7 +579,7 @@ export default function App() {
           </h1>
           <p className="text-sm text-slate-600 mt-1 max-w-3xl">
             {activeView === 'workbench'
-              ? 'Offloads 4-corner perspective, orientation & MRZ preprocessing to OffscreenCanvas Web Workers, crops portraits & signatures, detects specimen watermarks, decodes PDF417 barcodes, and extracts OCR-B MRZ & native VIZ fields client-side.'
+              ? 'Offloads 4-corner perspective, orientation & MRZ preprocessing to OffscreenCanvas Web Workers, runs VIZ + OCR-B in parallel, crops portraits & signatures, detects specimen watermarks, and decodes PDF417 barcodes client-side.'
               : activeView === 'history'
                 ? 'In-memory scans processed during this browser session. No document images or personal data leave your device.'
                 : 'Drop-in TypeScript module architecture designed to be copied or embedded via CDN straight into web applications.'}
@@ -596,6 +606,7 @@ export default function App() {
                 manualCorners={manualCorners}
                 preprocess={preprocess}
                 enhanceMrzPass={enhanceMrzPass}
+                mrzOnly={mrzOnly}
                 enableBarcodePass={enableBarcodePass}
                 extractMedia={extractMedia}
                 mrzModel={mrzModel}
@@ -620,7 +631,14 @@ export default function App() {
                 onTogglePerspective={setPerspectiveCorrection}
                 onChangeManualCorners={setManualCorners}
                 onTogglePreprocess={setPreprocess}
-                onToggleMrzPass={setEnhanceMrzPass}
+                onToggleMrzPass={(enabled) => {
+                  setEnhanceMrzPass(enabled);
+                  if (!enabled) setMrzOnly(false);
+                }}
+                onToggleMrzOnly={(enabled) => {
+                  setMrzOnly(enabled);
+                  if (enabled) setEnhanceMrzPass(true);
+                }}
                 onToggleBarcodePass={setEnableBarcodePass}
                 onToggleExtractMedia={setExtractMedia}
                 onChangeMrzModel={setMrzModel}

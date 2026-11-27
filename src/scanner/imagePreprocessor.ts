@@ -8,6 +8,25 @@ export interface DynamicMrzBandResult {
   tightBottom: number;
 }
 
+export interface PreprocessDocumentOptions {
+  preprocess?: boolean;
+  rotation?: 0 | 90 | 180 | 270;
+  deskewDegrees?: number;
+  includePreviews?: boolean;
+  skipFullPage?: boolean;
+  skipMrzStrips?: boolean;
+  needOriginal?: boolean;
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob | undefined> {
+  if (typeof canvas.toBlob !== 'function') {
+    return Promise.resolve(undefined);
+  }
+  return new Promise((resolve) => {
+    canvas.toBlob((blob) => resolve(blob ?? undefined), 'image/png');
+  });
+}
+
 export function getSurfaceDimensions(surface: ImageSurface): { width: number; height: number } {
   if (typeof HTMLImageElement !== 'undefined' && surface instanceof HTMLImageElement) {
     return {
@@ -254,7 +273,8 @@ export function flattenShadowIlluminationBuffer(
 /**
  * Locates dense monospace MRZ rows inside the lower half of a rectified upright document.
  * Requires strong dark ink contrast (>= 52) so pastel guilloche backgrounds never bridge
- * across the lower half, tightening strips cleanly around TD1/TD3 MRZ lines.
+ * across the lower half, and strongly prioritizes lower-band monospace MRZ clusters
+ * over mid-page VIZ rows so TD3/TD1 tight strips lock cleanly around the actual MRZ.
  */
 export function detectDynamicMrzBand(
   gray: Uint8ClampedArray,
@@ -279,7 +299,12 @@ export function detectDynamicMrzBand(
   const xEnd = Math.ceil(width * 0.975);
   const stepX = Math.max(1, Math.floor((xEnd - xStart) / 480));
 
-  const candidateRows: number[] = [];
+  interface CandidateRow {
+    y: number;
+    transitions: number;
+    spanRatio: number;
+  }
+  const candidateRows: CandidateRow[] = [];
   const rowSamples: number[] = [];
 
   for (let y = yStart; y <= yEnd; y++) {
@@ -318,7 +343,7 @@ export function detectDynamicMrzBand(
     const spanRatio = (lastInkX - firstInkX) / width;
 
     if (transitions >= 34 && inkFrac >= 0.03 && inkFrac <= 0.46 && spanRatio >= 0.56) {
-      candidateRows.push(y);
+      candidateRows.push({ y, transitions, spanRatio });
     }
   }
 
@@ -332,31 +357,66 @@ export function detectDynamicMrzBand(
     top: number;
     bottom: number;
     count: number;
+    transSum: number;
+    spanSum: number;
   }
   const clusters: Cluster[] = [];
-  let cur: Cluster = { top: candidateRows[0], bottom: candidateRows[0], count: 1 };
+  let cur: Cluster = {
+    top: candidateRows[0].y,
+    bottom: candidateRows[0].y,
+    count: 1,
+    transSum: candidateRows[0].transitions,
+    spanSum: candidateRows[0].spanRatio,
+  };
 
   for (let i = 1; i < candidateRows.length; i++) {
-    const y = candidateRows[i];
-    if (y - cur.bottom <= maxGap) {
-      cur.bottom = y;
+    const row = candidateRows[i];
+    if (row.y - cur.bottom <= maxGap) {
+      cur.bottom = row.y;
       cur.count++;
+      cur.transSum += row.transitions;
+      cur.spanSum += row.spanRatio;
     } else {
       clusters.push(cur);
-      cur = { top: y, bottom: y, count: 1 };
+      cur = {
+        top: row.y,
+        bottom: row.y,
+        count: 1,
+        transSum: row.transitions,
+        spanSum: row.spanRatio,
+      };
     }
   }
   clusters.push(cur);
 
   let best: Cluster | null = null;
   let bestScore = -1;
+  const maxCountCap = Math.max(24, Math.round(height * 0.14));
+
   for (const c of clusters) {
     const spanNorm = (c.bottom - c.top + 1) / height;
+    const topNorm = c.top / height;
     const bottomNorm = c.bottom / height;
-    if (spanNorm < 0.04 || spanNorm > 0.44 || bottomNorm < 0.72 || c.count < 6) {
+    if (spanNorm < 0.04 || spanNorm > 0.44 || bottomNorm < 0.75 || c.count < 6) {
       continue;
     }
-    const score = c.count * (bottomNorm >= 0.8 ? 1.25 : 1);
+
+    const avgTrans = c.transSum / c.count;
+    const avgSpan = c.spanSum / c.count;
+    const effectiveRows = Math.min(c.count, maxCountCap);
+
+    // Strongly prefer true bottom-edge MRZ clusters (bottomNorm >= 0.82, topNorm >= 0.58)
+    // over taller mid-page VIZ + portrait bands that sit higher on the page.
+    const zoneWeight =
+      bottomNorm >= 0.82 && topNorm >= 0.58
+        ? 3.2
+        : bottomNorm >= 0.82
+          ? 1.8
+          : 0.75;
+    const metricWeight =
+      (0.6 + Math.min(1.4, avgTrans / 90)) * (avgSpan >= 0.74 ? 1.25 : 1.0);
+    const score = effectiveRows * zoneWeight * metricWeight;
+
     if (score > bestScore) {
       bestScore = score;
       best = c;
@@ -385,7 +445,12 @@ export function detectDynamicMrzBand(
   };
 }
 
-function applyContrastGrayscale(ctx: CanvasRenderingContext2D, width: number, height: number): GrayscaleBuffer {
+function applyContrastGrayscale(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  writeBackPixels = true
+): GrayscaleBuffer {
   const imageData = ctx.getImageData(0, 0, width, height);
   const data = imageData.data;
   const gray = new Uint8ClampedArray(width * height);
@@ -395,6 +460,10 @@ function applyContrastGrayscale(ctx: CanvasRenderingContext2D, width: number, he
   }
 
   flattenShadowIlluminationBuffer(gray, width, height);
+
+  if (!writeBackPixels) {
+    return { data: gray, width, height };
+  }
 
   const histogram = new Uint32Array(256);
   const marginX = Math.floor(width * 0.02);
@@ -614,14 +683,15 @@ function trimWhiteRotationMargins(canvas: HTMLCanvasElement): HTMLCanvasElement 
   return trimmed;
 }
 
-function buildMrzStrip(
+async function buildMrzStrip(
   origCanvas: HTMLCanvasElement,
   targetW: number,
   targetH: number,
   topRatio: number,
   bottomRatio: number,
-  enhance: boolean
-): { dataUrl: string; grayscale: GrayscaleBuffer } {
+  enhance: boolean,
+  encodeDataUrl: boolean
+): Promise<{ dataUrl: string; blob?: Blob; grayscale: GrayscaleBuffer }> {
   const srcX = Math.round(targetW * 0.018);
   const srcW = Math.max(1, targetW - srcX * 2);
   const srcY = Math.round(targetH * topRatio);
@@ -647,8 +717,11 @@ function buildMrzStrip(
   mrzCtx.drawImage(origCanvas, srcX, srcY, srcW, srcH, borderPad, borderPad, innerW, innerH);
 
   const grayscale = applyRowFlatFieldMrzNormalization(mrzCtx, outW, outH, borderPad, enhance);
+  const blob = await canvasToBlob(mrzCanvas);
+  const dataUrl = encodeDataUrl || !blob ? mrzCanvas.toDataURL('image/png') : '';
   return {
-    dataUrl: mrzCanvas.toDataURL('image/png'),
+    dataUrl,
+    blob,
     grayscale,
   };
 }
@@ -660,13 +733,18 @@ function buildMrzStrip(
  */
 export async function preprocessDocumentImage(
   input: ImageInput,
-  options: {
-    preprocess?: boolean;
-    rotation?: 0 | 90 | 180 | 270;
-    deskewDegrees?: number;
-  } = {}
+  options: PreprocessDocumentOptions = {}
 ): Promise<PreprocessedResult> {
-  const { preprocess = true, rotation = 0, deskewDegrees = 0 } = options;
+  const {
+    preprocess = true,
+    rotation = 0,
+    deskewDegrees = 0,
+    includePreviews = true,
+    skipFullPage = false,
+    skipMrzStrips = false,
+    needOriginal = true,
+  } = options;
+
   const isCanvas =
     typeof HTMLCanvasElement !== 'undefined' && input instanceof HTMLCanvasElement;
   const isBitmap = typeof ImageBitmap !== 'undefined' && input instanceof ImageBitmap;
@@ -720,48 +798,123 @@ export async function preprocessDocumentImage(
     origCanvas = trimWhiteRotationMargins(origCanvas);
   }
 
+  const activeOrigCtx = origCanvas.getContext('2d', { willReadFrequently: true });
+  if (!activeOrigCtx) throw new Error('2D canvas context unavailable');
+
   const targetW = origCanvas.width;
   const targetH = origCanvas.height;
-  const originalDataUrl = origCanvas.toDataURL('image/png');
 
-  const enhCanvas = document.createElement('canvas');
-  enhCanvas.width = targetW;
-  enhCanvas.height = targetH;
-  const enhCtx = enhCanvas.getContext('2d', { willReadFrequently: true });
-  if (!enhCtx) throw new Error('2D canvas context unavailable');
-  enhCtx.drawImage(origCanvas, 0, 0);
-
-  let mrzBand: DynamicMrzBandResult;
-  if (preprocess) {
-    const enhGray = applyContrastGrayscale(enhCtx, targetW, targetH);
-    mrzBand = detectDynamicMrzBand(enhGray.data, targetW, targetH);
-  } else {
-    const rgba = enhCtx.getImageData(0, 0, targetW, targetH).data;
-    const rawGray = new Uint8ClampedArray(targetW * targetH);
-    for (let i = 0, p = 0; i < rgba.length; i += 4, p++) {
-      rawGray[p] = Math.round(0.299 * rgba[i] + 0.587 * rgba[i + 1] + 0.114 * rgba[i + 2]);
+  let originalBlob: Blob | undefined;
+  let originalDataUrl = '';
+  if (needOriginal) {
+    originalBlob = await canvasToBlob(origCanvas);
+    if (includePreviews || !originalBlob) {
+      originalDataUrl = origCanvas.toDataURL('image/png');
     }
-    mrzBand = detectDynamicMrzBand(rawGray, targetW, targetH);
   }
-  const enhancedDataUrl = enhCanvas.toDataURL('image/png');
 
-  const broadStrip = buildMrzStrip(
-    origCanvas,
-    targetW,
-    targetH,
-    mrzBand.broadTop,
-    mrzBand.broadBottom,
-    preprocess
-  );
+  let mrzBand: DynamicMrzBandResult = {
+    detected: false,
+    broadTop: 0.6,
+    broadBottom: 0.982,
+    tightTop: 0.7,
+    tightBottom: 0.982,
+  };
+  let enhancedBlob: Blob | undefined;
+  let enhancedDataUrl = '';
 
-  const tightStrip = buildMrzStrip(
-    origCanvas,
-    targetW,
-    targetH,
-    mrzBand.tightTop,
-    mrzBand.tightBottom,
-    preprocess
-  );
+  if (skipFullPage) {
+    if (!skipMrzStrips) {
+      if (preprocess) {
+        const enhGray = applyContrastGrayscale(activeOrigCtx, targetW, targetH, false);
+        mrzBand = detectDynamicMrzBand(enhGray.data, targetW, targetH);
+      } else {
+        const rgba = activeOrigCtx.getImageData(0, 0, targetW, targetH).data;
+        const rawGray = new Uint8ClampedArray(targetW * targetH);
+        for (let i = 0, p = 0; i < rgba.length; i += 4, p++) {
+          rawGray[p] = Math.round(0.299 * rgba[i] + 0.587 * rgba[i + 1] + 0.114 * rgba[i + 2]);
+        }
+        mrzBand = detectDynamicMrzBand(rawGray, targetW, targetH);
+      }
+    }
+  } else {
+    const enhCanvas = document.createElement('canvas');
+    enhCanvas.width = targetW;
+    enhCanvas.height = targetH;
+    const enhCtx = enhCanvas.getContext('2d', { willReadFrequently: true });
+    if (!enhCtx) throw new Error('2D canvas context unavailable');
+    enhCtx.drawImage(origCanvas, 0, 0);
+
+    if (preprocess) {
+      const enhGray = applyContrastGrayscale(enhCtx, targetW, targetH, true);
+      if (!skipMrzStrips) {
+        mrzBand = detectDynamicMrzBand(enhGray.data, targetW, targetH);
+      }
+      enhancedBlob = await canvasToBlob(enhCanvas);
+      if (includePreviews || !enhancedBlob) {
+        enhancedDataUrl = enhCanvas.toDataURL('image/png');
+      }
+    } else {
+      if (!skipMrzStrips) {
+        const rgba = enhCtx.getImageData(0, 0, targetW, targetH).data;
+        const rawGray = new Uint8ClampedArray(targetW * targetH);
+        for (let i = 0, p = 0; i < rgba.length; i += 4, p++) {
+          rawGray[p] = Math.round(0.299 * rgba[i] + 0.587 * rgba[i + 1] + 0.114 * rgba[i + 2]);
+        }
+        mrzBand = detectDynamicMrzBand(rawGray, targetW, targetH);
+      }
+      if (!needOriginal) {
+        originalBlob = await canvasToBlob(origCanvas);
+      }
+      enhancedBlob = originalBlob;
+      enhancedDataUrl =
+        includePreviews || !enhancedBlob
+          ? originalDataUrl || enhCanvas.toDataURL('image/png')
+          : '';
+    }
+  }
+
+  const emptyGray: GrayscaleBuffer = {
+    data: new Uint8ClampedArray(0),
+    width: 0,
+    height: 0,
+  };
+
+  if (skipMrzStrips) {
+    return {
+      originalDataUrl,
+      enhancedDataUrl,
+      mrzCropDataUrl: '',
+      mrzGrayscale: emptyGray,
+      mrzTightCropDataUrl: '',
+      mrzTightGrayscale: emptyGray,
+      width: targetW,
+      height: targetH,
+      originalBlob,
+      enhancedBlob,
+    };
+  }
+
+  const [broadStrip, tightStrip] = await Promise.all([
+    buildMrzStrip(
+      origCanvas,
+      targetW,
+      targetH,
+      mrzBand.broadTop,
+      mrzBand.broadBottom,
+      preprocess,
+      includePreviews
+    ),
+    buildMrzStrip(
+      origCanvas,
+      targetW,
+      targetH,
+      mrzBand.tightTop,
+      mrzBand.tightBottom,
+      preprocess,
+      false
+    ),
+  ]);
 
   return {
     originalDataUrl,
@@ -772,5 +925,9 @@ export async function preprocessDocumentImage(
     mrzTightGrayscale: tightStrip.grayscale,
     width: targetW,
     height: targetH,
+    originalBlob,
+    enhancedBlob,
+    mrzCropBlob: broadStrip.blob,
+    mrzTightCropBlob: tightStrip.blob,
   };
 }

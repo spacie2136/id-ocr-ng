@@ -6,6 +6,15 @@ export interface DynamicMrzBandResult {
     tightTop: number;
     tightBottom: number;
 }
+export interface PreprocessDocumentOptions {
+    preprocess?: boolean;
+    rotation?: 0 | 90 | 180 | 270;
+    deskewDegrees?: number;
+    includePreviews?: boolean;
+    skipFullPage?: boolean;
+    skipMrzStrips?: boolean;
+    needOriginal?: boolean;
+}
 export declare function getSurfaceDimensions(surface: ImageSurface): {
     width: number;
     height: number;
@@ -36,7 +45,8 @@ export declare function flattenShadowIlluminationBuffer(gray: Uint8ClampedArray,
 /**
  * Locates dense monospace MRZ rows inside the lower half of a rectified upright document.
  * Requires strong dark ink contrast (>= 52) so pastel guilloche backgrounds never bridge
- * across the lower half, tightening strips cleanly around TD1/TD3 MRZ lines.
+ * across the lower half, and strongly prioritizes lower-band monospace MRZ clusters
+ * over mid-page VIZ rows so TD3/TD1 tight strips lock cleanly around the actual MRZ.
  */
 export declare function detectDynamicMrzBand(gray: Uint8ClampedArray, width: number, height: number): DynamicMrzBandResult;
 /**
@@ -44,8 +54,4 @@ export declare function detectDynamicMrzBand(gray: Uint8ClampedArray, width: num
  * localized dual MRZ-strip canvases directly inside the browser with support for coarse
  * 90-degree rotation and arbitrary-angle fine deskewing.
  */
-export declare function preprocessDocumentImage(input: ImageInput, options?: {
-    preprocess?: boolean;
-    rotation?: 0 | 90 | 180 | 270;
-    deskewDegrees?: number;
-}): Promise<PreprocessedResult>;
+export declare function preprocessDocumentImage(input: ImageInput, options?: PreprocessDocumentOptions): Promise<PreprocessedResult>;

@@ -48,6 +48,20 @@ function stripDiacritics(str: string): string {
     .trim();
 }
 
+function toMrzTransliteratedUpper(str: string): string {
+  const expanded = str
+    .replace(/[Ää]/g, 'AE')
+    .replace(/[Öö]/g, 'OE')
+    .replace(/[Üü]/g, 'UE')
+    .replace(/ß/g, 'SS')
+    .replace(/[Øø]/g, 'OE')
+    .replace(/[Ææ]/g, 'AE')
+    .replace(/[Åå]/g, 'AA')
+    .replace(/[Łł]/g, 'L')
+    .replace(/[Đđ]/g, 'D');
+  return stripDiacritics(expanded);
+}
+
 function normalizeDocNumber(val: string | null | undefined): string {
   return (val ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
@@ -147,7 +161,7 @@ function pickNamePart(
     sources[fieldKey] = 'MRZ+VIZ';
     const mAscii = stripDiacritics(m);
     const vAscii = stripDiacritics(bestViz);
-    if (vAscii === mAscii && hasDiacritics(bestViz)) {
+    if ((vAscii === mAscii || toMrzTransliteratedUpper(bestViz) === mAscii) && hasDiacritics(bestViz)) {
       return bestViz;
     }
     if (
@@ -334,12 +348,18 @@ export function mergeDocumentSides(
   }
 
   if (front.surname && back.surname) {
-    const fSur = stripDiacritics(front.surname);
-    const bSur = stripDiacritics(back.surname);
-    const fTokens = new Set(fSur.split(' ').filter((t) => t.length >= 2));
-    const bTokens = bSur.split(' ').filter((t) => t.length >= 2);
-    const sharesToken = bTokens.some((t) => fTokens.has(t));
-    if (fSur && bSur && !sharesToken && !fSur.includes(bSur) && !bSur.includes(fSur)) {
+    const fCands = [stripDiacritics(front.surname), toMrzTransliteratedUpper(front.surname)];
+    const bCands = [stripDiacritics(back.surname), toMrzTransliteratedUpper(back.surname)];
+    const surnamesCompatible = fCands.some((fSur) =>
+      bCands.some((bSur) => {
+        if (!fSur || !bSur) return true;
+        if (fSur.includes(bSur) || bSur.includes(fSur)) return true;
+        const fTokens = new Set(fSur.split(' ').filter((t) => t.length >= 2));
+        const bTokens = bSur.split(' ').filter((t) => t.length >= 2);
+        return bTokens.some((t) => fTokens.has(t));
+      })
+    );
+    if (!surnamesCompatible) {
       conflicts.push({
         field: 'surname',
         frontValue: front.surname,

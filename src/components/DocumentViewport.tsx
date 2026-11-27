@@ -17,6 +17,7 @@ import {
   Upload,
   UserSquare2,
   X,
+  Zap,
 } from 'lucide-react';
 import {
   CameraAutoCapture,
@@ -133,6 +134,7 @@ interface DocumentViewportProps {
   manualCorners: DocumentQuad | null;
   preprocess: boolean;
   enhanceMrzPass: boolean;
+  mrzOnly: boolean;
   enableBarcodePass: boolean;
   extractMedia: boolean;
   mrzModel: MrzOcrModel;
@@ -150,6 +152,7 @@ interface DocumentViewportProps {
   onChangeManualCorners: (corners: DocumentQuad | null) => void;
   onTogglePreprocess: (val: boolean) => void;
   onToggleMrzPass: (val: boolean) => void;
+  onToggleMrzOnly: (val: boolean) => void;
   onToggleBarcodePass: (val: boolean) => void;
   onToggleExtractMedia: (val: boolean) => void;
   onChangeMrzModel: (model: MrzOcrModel) => void;
@@ -177,6 +180,7 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
   manualCorners,
   preprocess,
   enhanceMrzPass,
+  mrzOnly,
   enableBarcodePass,
   extractMedia,
   mrzModel,
@@ -194,6 +198,7 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
   onChangeManualCorners,
   onTogglePreprocess,
   onToggleMrzPass,
+  onToggleMrzOnly,
   onToggleBarcodePass,
   onToggleExtractMedia,
   onChangeMrzModel,
@@ -306,8 +311,10 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
   useEffect(() => {
     if (!result?.previews) {
       setPreviewLayer('original');
+    } else if (previewLayer === 'enhanced' && !result.previews.enhancedDataUrl) {
+      setPreviewLayer(result.previews.mrzCropDataUrl ? 'mrz' : 'original');
     }
-  }, [result]);
+  }, [result, previewLayer]);
 
   useEffect(() => {
     if (!selectedFile) {
@@ -560,8 +567,12 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
       return previewUrl;
     }
     if (result?.previews) {
-      if (previewLayer === 'enhanced') return result.previews.enhancedDataUrl;
-      if (previewLayer === 'mrz') return result.previews.mrzCropDataUrl;
+      if (previewLayer === 'enhanced' && result.previews.enhancedDataUrl) {
+        return result.previews.enhancedDataUrl;
+      }
+      if (previewLayer === 'mrz' && result.previews.mrzCropDataUrl) {
+        return result.previews.mrzCropDataUrl;
+      }
       return result.previews.originalDataUrl;
     }
     return previewUrl;
@@ -590,6 +601,12 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
   const canRunScan =
     scanMode === 'pair' ? Boolean(frontFile && backFile) : Boolean(selectedFile);
   const vizSelectValue = useCustomVizLanguages ? 'custom' : vizLanguageMode;
+  const availablePreviewLayers = (['original', 'enhanced', 'mrz'] as const).filter((layer) => {
+    if (!result?.previews) return false;
+    if (layer === 'enhanced') return Boolean(result.previews.enhancedDataUrl);
+    if (layer === 'mrz') return Boolean(result.previews.mrzCropDataUrl);
+    return Boolean(result.previews.originalDataUrl);
+  });
 
   const renderPairSideSlot = (
     side: 'front' | 'back',
@@ -1195,9 +1212,9 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
               </div>
 
               <div className="flex items-center gap-1.5">
-                {result?.previews && !editingCorners && (
+                {availablePreviewLayers.length > 0 && !editingCorners && (
                   <div className="flex items-center gap-1 p-0.5 bg-slate-100 rounded-md mr-1">
-                    {(['original', 'enhanced', 'mrz'] as const).map((layer) => (
+                    {availablePreviewLayers.map((layer) => (
                       <button
                         key={layer}
                         type="button"
@@ -1475,12 +1492,29 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
                 type="checkbox"
                 checked={enhanceMrzPass}
                 onChange={(e) => onToggleMrzPass(e.target.checked)}
-                disabled={isScanning}
-                className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                disabled={isScanning || mrzOnly}
+                className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:opacity-50"
               />
               <span className="flex items-center gap-1">
                 <ScanText className="w-3.5 h-3.5 text-slate-400" />
                 Dedicated MRZ Strip Pass
+              </span>
+            </label>
+
+            <label
+              className="inline-flex items-center gap-2 cursor-pointer select-none"
+              title="Skips full-page VIZ OCR & portrait/signature crops to extract MRZ fields at maximum speed"
+            >
+              <input
+                type="checkbox"
+                checked={mrzOnly}
+                onChange={(e) => onToggleMrzOnly(e.target.checked)}
+                disabled={isScanning}
+                className="rounded border-slate-300 text-amber-600 focus:ring-amber-500"
+              />
+              <span className="flex items-center gap-1 font-medium text-slate-800">
+                <Zap className="w-3.5 h-3.5 text-amber-500" />
+                Fast MRZ-Only
               </span>
             </label>
 
@@ -1501,12 +1535,12 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
             <label className="inline-flex items-center gap-2 cursor-pointer select-none">
               <input
                 type="checkbox"
-                checked={extractMedia}
+                checked={mrzOnly ? false : extractMedia}
                 onChange={(e) => onToggleExtractMedia(e.target.checked)}
-                disabled={isScanning}
-                className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                disabled={isScanning || mrzOnly}
+                className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:opacity-50"
               />
-              <span className="flex items-center gap-1">
+              <span className={`flex items-center gap-1 ${mrzOnly ? 'text-slate-400' : ''}`}>
                 <UserSquare2 className="w-3.5 h-3.5 text-slate-400" />
                 Portrait &amp; Signature
               </span>
@@ -1520,7 +1554,7 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
                 id="mrz-model-select"
                 value={mrzModel}
                 onChange={(e) => onChangeMrzModel(e.target.value as MrzOcrModel)}
-                disabled={isScanning || !enhanceMrzPass}
+                disabled={isScanning || (!enhanceMrzPass && !mrzOnly)}
                 title="Dedicated OCR-B model is default for highest MRZ accuracy; switch to Standard (eng) to revert"
                 className="text-xs font-medium text-slate-800 bg-white border border-slate-300 rounded-md px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-slate-100 disabled:text-slate-400"
               >
@@ -1544,8 +1578,12 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
                     onChangeVizLanguageMode(val as VizLanguageMode);
                   }
                 }}
-                disabled={isScanning}
-                title="Auto Native routes non-English documents to native Tesseract packs (e.g. eng+deu, eng+spa) for accurate diacritics"
+                disabled={isScanning || mrzOnly}
+                title={
+                  mrzOnly
+                    ? 'VIZ language pass is skipped in Fast MRZ-Only mode'
+                    : 'Auto Native routes non-English documents to native Tesseract packs (e.g. eng+deu, eng+spa) for accurate diacritics'
+                }
                 className="text-xs font-medium text-slate-800 bg-white border border-slate-300 rounded-md px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-slate-100 disabled:text-slate-400"
               >
                 <option value="auto">Auto Native (Default)</option>
@@ -1553,7 +1591,7 @@ export const DocumentViewport: React.FC<DocumentViewportProps> = ({
                 <option value="standard">Standard (eng)</option>
                 <option value="custom">Custom Override…</option>
               </select>
-              {useCustomVizLanguages && (
+              {useCustomVizLanguages && !mrzOnly && (
                 <input
                   type="text"
                   aria-label="Custom Tesseract VIZ language string"

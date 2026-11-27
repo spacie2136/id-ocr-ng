@@ -51,6 +51,7 @@ export {
   preprocessDocumentImage,
   sampleDownscaledGrayscale,
   type DynamicMrzBandResult,
+  type PreprocessDocumentOptions,
 } from './imagePreprocessor';
 export { analyzeDocumentOrientation, type OrientationAnalysis } from './orientation';
 export { ICAO_COUNTRY_CODES, resolveCountryName } from './countries';

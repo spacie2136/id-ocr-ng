@@ -3,6 +3,7 @@ import type {
   GrayscaleBuffer,
   PreprocessedResult,
 } from './types';
+import type { PreprocessDocumentOptions } from './imagePreprocessor';
 
 export class ScanAbortedError extends Error {
   readonly name = 'AbortError';
@@ -94,11 +95,14 @@ export function supportsWorkerPreprocessing(): boolean {
 const PREPROCESS_WORKER_SOURCE = `
 'use strict';
 
-async function canvasToDataUrl(canvas) {
+async function canvasToBlob(canvas) {
   if (typeof canvas.convertToBlob !== 'function') {
     throw new Error('OffscreenCanvas.convertToBlob is not supported');
   }
-  const blob = await canvas.convertToBlob({ type: 'image/png' });
+  return await canvas.convertToBlob({ type: 'image/png' });
+}
+
+async function blobToDataUrl(blob) {
   if (typeof FileReaderSync !== 'undefined') {
     return new FileReaderSync().readAsDataURL(blob);
   }
@@ -437,7 +441,7 @@ function detectDynamicMrzBand(gray, width, height) {
     const spanRatio = (lastInkX - firstInkX) / width;
 
     if (transitions >= 34 && inkFrac >= 0.03 && inkFrac <= 0.46 && spanRatio >= 0.56) {
-      candidateRows.push(y);
+      candidateRows.push({ y, transitions, spanRatio });
     }
   }
 
@@ -447,30 +451,60 @@ function detectDynamicMrzBand(gray, width, height) {
 
   const maxGap = Math.max(6, Math.round(height * 0.055));
   const clusters = [];
-  let cur = { top: candidateRows[0], bottom: candidateRows[0], count: 1 };
+  let cur = {
+    top: candidateRows[0].y,
+    bottom: candidateRows[0].y,
+    count: 1,
+    transSum: candidateRows[0].transitions,
+    spanSum: candidateRows[0].spanRatio,
+  };
 
   for (let i = 1; i < candidateRows.length; i++) {
-    const y = candidateRows[i];
-    if (y - cur.bottom <= maxGap) {
-      cur.bottom = y;
+    const row = candidateRows[i];
+    if (row.y - cur.bottom <= maxGap) {
+      cur.bottom = row.y;
       cur.count++;
+      cur.transSum += row.transitions;
+      cur.spanSum += row.spanRatio;
     } else {
       clusters.push(cur);
-      cur = { top: y, bottom: y, count: 1 };
+      cur = {
+        top: row.y,
+        bottom: row.y,
+        count: 1,
+        transSum: row.transitions,
+        spanSum: row.spanRatio,
+      };
     }
   }
   clusters.push(cur);
 
   let best = null;
   let bestScore = -1;
+  const maxCountCap = Math.max(24, Math.round(height * 0.14));
+
   for (let i = 0; i < clusters.length; i++) {
     const c = clusters[i];
     const spanNorm = (c.bottom - c.top + 1) / height;
+    const topNorm = c.top / height;
     const bottomNorm = c.bottom / height;
-    if (spanNorm < 0.04 || spanNorm > 0.44 || bottomNorm < 0.72 || c.count < 6) {
+    if (spanNorm < 0.04 || spanNorm > 0.44 || bottomNorm < 0.75 || c.count < 6) {
       continue;
     }
-    const score = c.count * (bottomNorm >= 0.8 ? 1.25 : 1);
+
+    const avgTrans = c.transSum / c.count;
+    const avgSpan = c.spanSum / c.count;
+    const effectiveRows = Math.min(c.count, maxCountCap);
+    const zoneWeight =
+      bottomNorm >= 0.82 && topNorm >= 0.58
+        ? 3.2
+        : bottomNorm >= 0.82
+          ? 1.8
+          : 0.75;
+    const metricWeight =
+      (0.6 + Math.min(1.4, avgTrans / 90)) * (avgSpan >= 0.74 ? 1.25 : 1.0);
+    const score = effectiveRows * zoneWeight * metricWeight;
+
     if (score > bestScore) {
       bestScore = score;
       best = c;
@@ -499,7 +533,7 @@ function detectDynamicMrzBand(gray, width, height) {
   };
 }
 
-function applyContrastGrayscale(ctx, width, height) {
+function applyContrastGrayscale(ctx, width, height, writeBackPixels) {
   const imageData = ctx.getImageData(0, 0, width, height);
   const data = imageData.data;
   const gray = new Uint8ClampedArray(width * height);
@@ -509,6 +543,10 @@ function applyContrastGrayscale(ctx, width, height) {
   }
 
   flattenShadowIlluminationBuffer(gray, width, height);
+
+  if (!writeBackPixels) {
+    return gray;
+  }
 
   const histogram = new Uint32Array(256);
   const marginX = Math.floor(width * 0.02);
@@ -695,7 +733,7 @@ function trimWhiteRotationMargins(canvas) {
   return trimmed;
 }
 
-async function buildMrzStrip(origCanvas, targetW, targetH, topRatio, bottomRatio, enhance) {
+async function buildMrzStrip(origCanvas, targetW, targetH, topRatio, bottomRatio, enhance, encodeDataUrl) {
   const srcX = Math.round(targetW * 0.018);
   const srcW = Math.max(1, targetW - srcX * 2);
   const srcY = Math.round(targetH * topRatio);
@@ -719,14 +757,20 @@ async function buildMrzStrip(origCanvas, targetW, targetH, topRatio, bottomRatio
   mrzCtx.drawImage(origCanvas, srcX, srcY, srcW, srcH, borderPad, borderPad, innerW, innerH);
 
   const grayscale = applyRowFlatFieldMrzNormalization(mrzCtx, outW, outH, borderPad, enhance);
-  const dataUrl = await canvasToDataUrl(mrzCanvas);
-  return { dataUrl, grayscale };
+  const blob = await canvasToBlob(mrzCanvas);
+  const dataUrl = encodeDataUrl ? await blobToDataUrl(blob) : '';
+  return { blob, dataUrl, grayscale };
 }
 
 async function handlePreprocessDocument(bitmap, opts) {
   const preprocess = opts.preprocess !== false;
   const rotation = opts.rotation || 0;
   const deskewDegrees = opts.deskewDegrees || 0;
+  const includePreviews = opts.includePreviews !== false;
+  const skipFullPage = Boolean(opts.skipFullPage);
+  const skipMrzStrips = Boolean(opts.skipMrzStrips);
+  const needOriginal = opts.needOriginal !== false;
+
   const srcW = Math.max(1, bitmap.width);
   const srcH = Math.max(1, bitmap.height);
 
@@ -774,37 +818,142 @@ async function handlePreprocessDocument(bitmap, opts) {
     origCanvas = trimWhiteRotationMargins(origCanvas);
   }
 
+  const activeOrigCtx = origCanvas.getContext('2d', { willReadFrequently: true });
+  if (!activeOrigCtx) throw new Error('OffscreenCanvas 2D context unavailable');
+
   const targetW = origCanvas.width;
   const targetH = origCanvas.height;
-  const originalDataUrl = await canvasToDataUrl(origCanvas);
 
-  const enhCanvas = new OffscreenCanvas(targetW, targetH);
-  const enhCtx = enhCanvas.getContext('2d', { willReadFrequently: true });
-  if (!enhCtx) throw new Error('OffscreenCanvas 2D context unavailable');
-  enhCtx.drawImage(origCanvas, 0, 0);
+  const originalBlobPromise = needOriginal
+    ? canvasToBlob(origCanvas)
+    : Promise.resolve(undefined);
 
-  let mrzBand;
-  if (preprocess) {
-    const enhGray = applyContrastGrayscale(enhCtx, targetW, targetH);
-    mrzBand = detectDynamicMrzBand(enhGray, targetW, targetH);
-  } else {
-    const rgba = enhCtx.getImageData(0, 0, targetW, targetH).data;
-    const rawGray = new Uint8ClampedArray(targetW * targetH);
-    for (let i = 0, p = 0; i < rgba.length; i += 4, p++) {
-      rawGray[p] = Math.round(0.299 * rgba[i] + 0.587 * rgba[i + 1] + 0.114 * rgba[i + 2]);
+  let mrzBand = {
+    detected: false,
+    broadTop: 0.6,
+    broadBottom: 0.982,
+    tightTop: 0.7,
+    tightBottom: 0.982,
+  };
+  let enhancedBlob = undefined;
+  let enhancedDataUrl = '';
+  let originalBlob = undefined;
+  let originalDataUrl = '';
+
+  if (skipFullPage) {
+    if (!skipMrzStrips) {
+      if (preprocess) {
+        const enhGray = applyContrastGrayscale(activeOrigCtx, targetW, targetH, false);
+        mrzBand = detectDynamicMrzBand(enhGray, targetW, targetH);
+      } else {
+        const rgba = activeOrigCtx.getImageData(0, 0, targetW, targetH).data;
+        const rawGray = new Uint8ClampedArray(targetW * targetH);
+        for (let i = 0, p = 0; i < rgba.length; i += 4, p++) {
+          rawGray[p] = Math.round(0.299 * rgba[i] + 0.587 * rgba[i + 1] + 0.114 * rgba[i + 2]);
+        }
+        mrzBand = detectDynamicMrzBand(rawGray, targetW, targetH);
+      }
     }
-    mrzBand = detectDynamicMrzBand(rawGray, targetW, targetH);
+    originalBlob = await originalBlobPromise;
+    if (originalBlob && includePreviews) {
+      originalDataUrl = await blobToDataUrl(originalBlob);
+    }
+  } else {
+    const enhCanvas = new OffscreenCanvas(targetW, targetH);
+    const enhCtx = enhCanvas.getContext('2d', { willReadFrequently: true });
+    if (!enhCtx) throw new Error('OffscreenCanvas 2D context unavailable');
+    enhCtx.drawImage(origCanvas, 0, 0);
+
+    if (preprocess) {
+      const enhGray = applyContrastGrayscale(enhCtx, targetW, targetH, true);
+      if (!skipMrzStrips) {
+        mrzBand = detectDynamicMrzBand(enhGray, targetW, targetH);
+      }
+      const [origRes, enhRes] = await Promise.all([
+        originalBlobPromise,
+        canvasToBlob(enhCanvas),
+      ]);
+      originalBlob = origRes;
+      enhancedBlob = enhRes;
+    } else {
+      if (!skipMrzStrips) {
+        const rgba = enhCtx.getImageData(0, 0, targetW, targetH).data;
+        const rawGray = new Uint8ClampedArray(targetW * targetH);
+        for (let i = 0, p = 0; i < rgba.length; i += 4, p++) {
+          rawGray[p] = Math.round(0.299 * rgba[i] + 0.587 * rgba[i + 1] + 0.114 * rgba[i + 2]);
+        }
+        mrzBand = detectDynamicMrzBand(rawGray, targetW, targetH);
+      }
+      originalBlob = needOriginal ? await originalBlobPromise : await canvasToBlob(origCanvas);
+      enhancedBlob = originalBlob;
+    }
+
+    if (includePreviews) {
+      const [oUrl, eUrl] = await Promise.all([
+        originalBlob ? blobToDataUrl(originalBlob) : Promise.resolve(''),
+        enhancedBlob
+          ? enhancedBlob === originalBlob
+            ? Promise.resolve('')
+            : blobToDataUrl(enhancedBlob)
+          : Promise.resolve(''),
+      ]);
+      originalDataUrl = oUrl;
+      enhancedDataUrl = enhancedBlob === originalBlob ? oUrl : eUrl;
+    }
   }
-  const enhancedDataUrl = await canvasToDataUrl(enhCanvas);
+
+  if (skipMrzStrips) {
+    const emptyBuf = new ArrayBuffer(0);
+    return {
+      originalDataUrl,
+      enhancedDataUrl,
+      originalBlob,
+      enhancedBlob,
+      mrzCropDataUrl: '',
+      mrzGrayscale: {
+        buffer: emptyBuf,
+        width: 0,
+        height: 0,
+      },
+      mrzTightCropDataUrl: '',
+      mrzTightGrayscale: {
+        buffer: emptyBuf,
+        width: 0,
+        height: 0,
+      },
+      width: targetW,
+      height: targetH,
+    };
+  }
 
   const [broadStrip, tightStrip] = await Promise.all([
-    buildMrzStrip(origCanvas, targetW, targetH, mrzBand.broadTop, mrzBand.broadBottom, preprocess),
-    buildMrzStrip(origCanvas, targetW, targetH, mrzBand.tightTop, mrzBand.tightBottom, preprocess),
+    buildMrzStrip(
+      origCanvas,
+      targetW,
+      targetH,
+      mrzBand.broadTop,
+      mrzBand.broadBottom,
+      preprocess,
+      includePreviews
+    ),
+    buildMrzStrip(
+      origCanvas,
+      targetW,
+      targetH,
+      mrzBand.tightTop,
+      mrzBand.tightBottom,
+      preprocess,
+      false
+    ),
   ]);
 
   return {
     originalDataUrl,
     enhancedDataUrl,
+    originalBlob,
+    enhancedBlob,
+    mrzCropBlob: broadStrip.blob,
+    mrzTightCropBlob: tightStrip.blob,
     mrzCropDataUrl: broadStrip.dataUrl,
     mrzGrayscale: {
       buffer: broadStrip.grayscale.data.buffer,
@@ -847,10 +996,18 @@ self.onmessage = async (event) => {
     if (msg.type === 'preprocess') {
       const res = await handlePreprocessDocument(msg.bitmap, msg.options || {});
       try { msg.bitmap.close(); } catch {}
-      self.postMessage(
-        { id, ok: true, result: res },
-        [res.mrzGrayscale.buffer, res.mrzTightGrayscale.buffer]
-      );
+      const transferables = [];
+      if (res.mrzGrayscale.buffer && res.mrzGrayscale.buffer.byteLength > 0) {
+        transferables.push(res.mrzGrayscale.buffer);
+      }
+      if (
+        res.mrzTightGrayscale.buffer &&
+        res.mrzTightGrayscale.buffer.byteLength > 0 &&
+        res.mrzTightGrayscale.buffer !== res.mrzGrayscale.buffer
+      ) {
+        transferables.push(res.mrzTightGrayscale.buffer);
+      }
+      self.postMessage({ id, ok: true, result: res }, transferables);
       return;
     }
 
@@ -1046,11 +1203,7 @@ export class PreprocessWorkerClient {
 
   async preprocessDocument(
     surface: HTMLImageElement | HTMLCanvasElement | ImageBitmap,
-    options: {
-      preprocess?: boolean;
-      rotation?: 0 | 90 | 180 | 270;
-      deskewDegrees?: number;
-    },
+    options: PreprocessDocumentOptions,
     signal?: AbortSignal
   ): Promise<PreprocessedResult | null> {
     if (!this.isAvailable()) return null;
@@ -1061,6 +1214,10 @@ export class PreprocessWorkerClient {
       const raw = await this.runJob<{
         originalDataUrl: string;
         enhancedDataUrl: string;
+        originalBlob?: Blob;
+        enhancedBlob?: Blob;
+        mrzCropBlob?: Blob;
+        mrzTightCropBlob?: Blob;
         mrzCropDataUrl: string;
         mrzGrayscale: { buffer: ArrayBuffer; width: number; height: number };
         mrzTightCropDataUrl: string;
@@ -1076,6 +1233,10 @@ export class PreprocessWorkerClient {
       return {
         originalDataUrl: raw.originalDataUrl,
         enhancedDataUrl: raw.enhancedDataUrl,
+        originalBlob: raw.originalBlob,
+        enhancedBlob: raw.enhancedBlob,
+        mrzCropBlob: raw.mrzCropBlob,
+        mrzTightCropBlob: raw.mrzTightCropBlob,
         mrzCropDataUrl: raw.mrzCropDataUrl,
         mrzGrayscale: {
           data: new Uint8ClampedArray(raw.mrzGrayscale.buffer),

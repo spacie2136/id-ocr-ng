@@ -315,7 +315,13 @@ function stripTrailingFillerNoise(rawField: string): string {
   let prev = '';
   while (cleaned !== prev) {
     prev = cleaned;
-    cleaned = cleaned.replace(/(?:<+[KL]{2,}|<<[KL])$/g, '').replace(/<+$/g, '');
+    cleaned = cleaned
+      .replace(/<+$/g, '')
+      .replace(/<<<+[KL<]*$/g, '')
+      .replace(/<+[KL]{2,}[KL<]*$/g, '')
+      .replace(/<<[KL]$/g, '')
+      .replace(/(?:<+[KL]){3,}<*$/g, '')
+      .replace(/<+$/g, '');
   }
   return cleaned;
 }
@@ -370,11 +376,22 @@ function isMixedCaseVizSentence(rawLine: string): boolean {
 }
 
 function cleanMrzLine(line: string): string {
-  return line
+  const cleaned = line
     .replace(/\s+/g, '')
     .split('')
     .map(normalizeMrzChar)
     .join('');
+  // Strip 1-2 leading '<' left-edge specks ahead of valid >=28-char MRZ content
+  const leadingArtifact = cleaned.match(/^<{1,2}([A-Z0-9][A-Z0-9<]{27,})$/);
+  if (leadingArtifact) {
+    const tail = leadingArtifact[1];
+    const chevrons = (tail.match(/</g) || []).length;
+    const digits = (tail.match(/\d/g) || []).length;
+    if (chevrons >= 2 || digits >= 5) {
+      return tail;
+    }
+  }
+  return cleaned;
 }
 
 function isLikelyMrzLine(line: string): boolean {
@@ -418,7 +435,7 @@ function resolveSingleLetterIssuingCountry(rawCountry: string, nationality: stri
   return rawCountry;
 }
 
-function parseTD3(line1Raw: string, line2Raw: string, isVisaA = false): MrzParsedData {
+function parseTD3Single(line1Raw: string, line2Raw: string, isVisaA = false): MrzParsedData {
   const line1 = padOrTrim(line1Raw, 44);
   const line2 = padOrTrim(line2Raw, 44);
 
@@ -547,6 +564,94 @@ function parseTD3(line1Raw: string, line2Raw: string, isVisaA = false): MrzParse
     validCount,
     totalChecks: checks.length,
   };
+}
+
+function buildTd3TailVariants(prefixAdjustedLine2: string): string[] {
+  const variants = [prefixAdjustedLine2];
+  if (prefixAdjustedLine2.length <= 29) return variants;
+
+  const head28 = prefixAdjustedLine2.slice(0, 28);
+  const tail = prefixAdjustedLine2.slice(28);
+  const body = tail.slice(0, -1);
+  const lastChar = tail[tail.length - 1];
+
+  if (tail.length > 16 && /^[<KL]+$/.test(body)) {
+    variants.push(head28 + '<'.repeat(15) + lastChar);
+  }
+
+  const collapsed = body.replace(/(?:KL|LK)/g, '<');
+  if (collapsed !== body || tail.length !== 16) {
+    variants.push(head28 + padOrTrim(collapsed, 15) + lastChar);
+  }
+
+  const fillerDigits = tail.match(/^([<KL]+)(\d{1,2})$/);
+  if (fillerDigits) {
+    const digits = fillerDigits[2];
+    if (digits.length === 2) {
+      variants.push(head28 + '<'.repeat(14) + digits);
+    }
+    variants.push(head28 + '<'.repeat(15) + digits[digits.length - 1]);
+  }
+
+  return variants;
+}
+
+function scoreTd3Candidate(cand: MrzParsedData): number {
+  let score = cand.validCount * 10 + (cand.allCheckDigitsValid ? 5 : 0);
+  if (cand.dateOfBirth) score += 2;
+  if (cand.dateOfExpiry) score += 2;
+  if (cand.sex !== 'Unspecified') score += 1;
+  return score;
+}
+
+function parseTD3(line1Raw: string, line2Raw: string, isVisaA = false): MrzParsedData {
+  const base = parseTD3Single(line1Raw, line2Raw, isVisaA);
+  if (isVisaA || base.allCheckDigitsValid) {
+    return base;
+  }
+
+  const line1Country = fixAlphaField(line1Raw.slice(2, 5)).replace(/</g, '');
+  const prefixVariants = new Set<string>([line2Raw]);
+
+  // Recover 1-2 extra OCR characters inserted inside the document-number slice (0..9)
+  // when the 3-letter country code + 6-digit DOB + sex clearly sit shifted at col 11 or 12.
+  for (const shift of [1, 2]) {
+    if (line2Raw.length < 28 + shift || line2Raw.length > 52) continue;
+    const shiftedCountry = fixAlphaField(line2Raw.slice(10 + shift, 13 + shift)).replace(/</g, '');
+    const shiftedRest = line2Raw.slice(13 + shift, 27 + shift);
+    const countryMatches = line1Country.length >= 2 && shiftedCountry.startsWith(line1Country.slice(0, 2));
+    const dateBandMatches = /^[A-Z0-9]{7}[MFX<][A-Z0-9]{6}/.test(shiftedRest);
+
+    if (countryMatches || dateBandMatches) {
+      prefixVariants.add(line2Raw.slice(shift));
+      if (shift === 1) {
+        for (let k = 1; k < 10; k++) {
+          prefixVariants.add(line2Raw.slice(0, k) + line2Raw.slice(k + 1));
+        }
+      }
+    }
+  }
+
+  const candidateLines = new Set<string>();
+  for (const pv of prefixVariants) {
+    for (const v of buildTd3TailVariants(pv)) {
+      candidateLines.add(v);
+    }
+  }
+
+  let best = base;
+  let bestScore = scoreTd3Candidate(base);
+  for (const altLine2 of candidateLines) {
+    if (altLine2 === line2Raw) continue;
+    const cand = parseTD3Single(line1Raw, altLine2, false);
+    const candScore = scoreTd3Candidate(cand);
+    if (candScore > bestScore) {
+      bestScore = candScore;
+      best = cand;
+    }
+  }
+
+  return best;
 }
 
 function parseTD1(line1Raw: string, line2Raw: string, line3Raw: string): MrzParsedData {

@@ -112,6 +112,82 @@ function namesAgree(mrzName: string, vizName: string, allowPrefix = false): bool
 }
 
 /**
+ * Resolves the exact surname / given-name boundary when an MRZ omits the double-chevron (`<<`)
+ * delimiter (e.g. `P<UTOQUEST<AMELIA<MARY`) and prints only single `<` separators, causing
+ * MRZ parsing alone to place all name tokens inside `mrz.surnames`.
+ */
+export function matchUnsplitMrzNameWithViz(
+  mrz: MrzParsedData,
+  viz: VizParsedData
+): {
+  surname: string;
+  surnames: string[];
+  givenNames: string;
+  givenNamesList: string[];
+} | null {
+  if (mrz.givenNames.trim() !== '' || mrz.surnames.length < 2) {
+    return null;
+  }
+  const vizSurRaw = viz.surname?.trim();
+  const vizGivRaw = viz.givenNames?.trim();
+  if (!vizSurRaw || !vizGivRaw) {
+    return null;
+  }
+
+  const mrzTokens = mrz.surnames.map((t) => stripDiacriticsUpper(t)).filter(Boolean);
+  const vSurTokens = toMrzTransliteratedUpper(vizSurRaw).split(' ').filter(Boolean);
+  const vGivTokens = toMrzTransliteratedUpper(vizGivRaw).split(' ').filter(Boolean);
+
+  if (mrzTokens.length < 2 || vSurTokens.length === 0 || vGivTokens.length === 0) {
+    return null;
+  }
+
+  const vAllTokens = [...vSurTokens, ...vGivTokens];
+  let tokenMatch = mrzTokens.length >= vSurTokens.length + 1 && mrzTokens.length <= vAllTokens.length;
+
+  if (tokenMatch) {
+    for (let i = 0; i < mrzTokens.length; i++) {
+      const mt = mrzTokens[i];
+      const vt = vAllTokens[i];
+      const isLastMrz = i === mrzTokens.length - 1;
+      const exactOrFuzzy =
+        mt === vt || (Math.max(mt.length, vt.length) >= 4 && levenshtein(mt, vt) <= 1);
+      const truncatedPrefix = isLastMrz && mt.length >= 2 && vt.startsWith(mt);
+      if (!exactOrFuzzy && !truncatedPrefix) {
+        tokenMatch = false;
+        break;
+      }
+    }
+  }
+
+  if (!tokenMatch) {
+    const mCompact = mrzTokens.join('');
+    const vSurCompact = vSurTokens.join('');
+    const vAllCompact = vAllTokens.join('');
+    if (
+      !(
+        mCompact.length >= vSurCompact.length + 2 &&
+        mCompact.startsWith(vSurCompact) &&
+        (mCompact === vAllCompact || vAllCompact.startsWith(mCompact))
+      )
+    ) {
+      return null;
+    }
+  }
+
+  const cleanSurnames =
+    viz.surnames.length > 0 ? viz.surnames : vizSurRaw.split(/\s+/).filter(Boolean);
+  const cleanGivenList = vizGivRaw.split(/\s+/).filter(Boolean);
+
+  return {
+    surname: vizSurRaw,
+    surnames: cleanSurnames,
+    givenNames: vizGivRaw,
+    givenNamesList: cleanGivenList,
+  };
+}
+
+/**
  * Pure single-side MRZ vs. VIZ consistency validator.
  * Compares decoded ICAO 9303 MRZ values against Visual Inspection Zone OCR values
  * on the same document image to flag tampering, OCR hallucinations, or mismatched fields.
@@ -200,31 +276,36 @@ export function crossValidateMrzAndViz(
     }
   }
 
-  // 5. Surname
-  if (mrz.surname && viz.surname) {
-    if (namesAgree(mrz.surname, viz.surname, false)) {
-      matchedFields.push('surname');
-    } else {
-      discrepancies.push({
-        field: 'surname',
-        mrzValue: mrz.surname,
-        vizValue: viz.surname,
-        severity: 'critical',
-      });
+  // 5 & 6. Surname and Given Names (handling MRZ lacking '<<' split when confirmed by VIZ)
+  const unsplitSplitMatch = matchUnsplitMrzNameWithViz(mrz, viz);
+  if (unsplitSplitMatch) {
+    matchedFields.push('surname');
+    matchedFields.push('givenNames');
+  } else {
+    if (mrz.surname && viz.surname) {
+      if (namesAgree(mrz.surname, viz.surname, false)) {
+        matchedFields.push('surname');
+      } else {
+        discrepancies.push({
+          field: 'surname',
+          mrzValue: mrz.surname,
+          vizValue: viz.surname,
+          severity: 'critical',
+        });
+      }
     }
-  }
 
-  // 6. Given Names (allow prefix match because MRZ truncates long names)
-  if (mrz.givenNames && viz.givenNames) {
-    if (namesAgree(mrz.givenNames, viz.givenNames, true)) {
-      matchedFields.push('givenNames');
-    } else {
-      discrepancies.push({
-        field: 'givenNames',
-        mrzValue: mrz.givenNames,
-        vizValue: viz.givenNames,
-        severity: 'warning',
-      });
+    if (mrz.givenNames && viz.givenNames) {
+      if (namesAgree(mrz.givenNames, viz.givenNames, true)) {
+        matchedFields.push('givenNames');
+      } else {
+        discrepancies.push({
+          field: 'givenNames',
+          mrzValue: mrz.givenNames,
+          vizValue: viz.givenNames,
+          severity: 'warning',
+        });
+      }
     }
   }
 

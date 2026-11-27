@@ -11,7 +11,7 @@ export { assessImageQuality, assessCanvasQuality, computeVisibleVideoCrop, Camer
 export { parseMrzFromText, computeCheckDigit, synthesizeConsensusMrz } from './mrzParser';
 export { parseVizText, normalizeVisualDate } from './vizParser';
 export { DEFAULT_COUNTRY_VIZ_LANGUAGES, DEFAULT_MULTILINGUAL_VIZ_LANGUAGES, ENGLISH_PRIMARY_COUNTRY_CODES, inferNativeVizLanguageFromText, resolveNativeVizLanguage, resolveVizPassStrategy, } from './vizLanguages';
-export { detectDynamicMrzBand, flattenShadowIlluminationBuffer, loadImageElement, loadImageSurface, preprocessDocumentImage, sampleDownscaledGrayscale, type DynamicMrzBandResult, } from './imagePreprocessor';
+export { detectDynamicMrzBand, flattenShadowIlluminationBuffer, loadImageElement, loadImageSurface, preprocessDocumentImage, sampleDownscaledGrayscale, type DynamicMrzBandResult, type PreprocessDocumentOptions, } from './imagePreprocessor';
 export { analyzeDocumentOrientation, type OrientationAnalysis } from './orientation';
 export { ICAO_COUNTRY_CODES, resolveCountryName } from './countries';
 export type { AamvaParsedData, BarcodeParsedData, CameraAutoCaptureOptions, CheckDigitStatus, CroppedRegionInfo, CrossValidationDiscrepancy, DocumentQuad, DocumentType, ExtractedIdentity, FieldSource, GrayscaleBuffer, ImageInput, ImageQualityReport, ImageSurface, MergedDocumentResult, MrzFormat, MrzOcrModel, MrzParsedData, NormalizedRect, OrientationInfo, PairScanOptions, PerspectiveInfo, Point2D, PreprocessedResult, QualityGateOptions, QualityIssueCode, ScanProgress, ScanStage, ScannerOptions, SideConsistencyConflict, SingleSideCrossValidation, SpecimenDetectionResult, TesseractWorkerConfig, VizLanguageMode, VizLineBox, VizParsedData, } from './types';

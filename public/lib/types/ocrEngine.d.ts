@@ -3,12 +3,16 @@ export declare class DocumentScanner {
     private worker;
     private workerLang;
     private workerConfigKey;
+    private workerInitPromise;
+    private workerInitKey;
     private vizNativeWorker;
     private vizNativeLang;
     private vizNativeConfigKey;
     private vizNativeFailedLangs;
     private mrzWorker;
     private mrzWorkerConfigKey;
+    private mrzWorkerInitPromise;
+    private mrzWorkerInitKey;
     private mrzOcrbFailed;
     private preprocessWorker;
     private defaultWorkerConfig;
@@ -21,6 +25,15 @@ export declare class DocumentScanner {
     private ensureWorker;
     private ensureNativeVizWorker;
     private ensureMrzWorker;
+    /**
+     * Pre-warms both the primary Tesseract VIZ worker and the dedicated OCR-B MRZ worker
+     * concurrently before a user drops a file or clicks capture.
+     */
+    warmup(options?: TesseractWorkerConfig & {
+        language?: string;
+        preloadMrz?: boolean;
+        preloadViz?: boolean;
+    }): Promise<void>;
     private preprocessWithWorkerOrFallback;
     private runOrientationPass;
     private runLightweightProbe;

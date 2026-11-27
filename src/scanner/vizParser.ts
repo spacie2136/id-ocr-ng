@@ -69,7 +69,21 @@ const MONTHS: Record<string, string> = {
   GRU: '12',
 };
 
-export function normalizeVisualDate(raw: string): string | null {
+function resolveTwoDigitYear(yy: number, kind?: 'birth' | 'issue' | 'expiry'): number {
+  const currentYear = new Date().getFullYear();
+  const currentTwoDigit = currentYear % 100;
+  const currentCentury = Math.floor(currentYear / 100) * 100;
+
+  if (kind === 'birth' || kind === 'issue') {
+    return yy > currentTwoDigit ? currentCentury - 100 + yy : currentCentury + yy;
+  }
+  return yy <= currentTwoDigit + 25 ? currentCentury + yy : currentCentury - 100 + yy;
+}
+
+export function normalizeVisualDate(
+  raw: string,
+  kind?: 'birth' | 'issue' | 'expiry'
+): string | null {
   if (!raw) return null;
   const cleaned = raw
     .toUpperCase()
@@ -85,22 +99,24 @@ export function normalizeVisualDate(raw: string): string | null {
   }
 
   m = cleaned.match(
-    /\b(\d{1,2})\s+([A-Z\u00C0-\u024F]{3,6})(?:\/[A-Z\u00C0-\u024F]{2,6})?\s+((?:19|20)\d{2})\b/
+    /\b(\d{1,2})\s+([A-Z\u00C0-\u024F]{3,6})(?:\/([A-Z\u00C0-\u024F]{2,6}))?\s+((?:19|20)\d{2}|\d{2})\b/
   );
   if (m) {
-    const [, d, mon, y] = m;
-    const monthNum = MONTHS[mon];
+    const [, d, mon1, mon2, rawY] = m;
+    const monthNum = MONTHS[mon1] ?? (mon2 ? MONTHS[mon2] : undefined);
     if (monthNum && +d >= 1 && +d <= 31) {
-      return `${y}-${monthNum}-${d.padStart(2, '0')}`;
+      const fullYear = rawY.length === 2 ? resolveTwoDigitYear(parseInt(rawY, 10), kind) : rawY;
+      return `${fullYear}-${monthNum}-${d.padStart(2, '0')}`;
     }
   }
 
-  m = cleaned.match(/\b([A-Z\u00C0-\u024F]{3,6})\s+(\d{1,2}),?\s+((?:19|20)\d{2})\b/);
+  m = cleaned.match(/\b([A-Z\u00C0-\u024F]{3,6})\s+(\d{1,2}),?\s+((?:19|20)\d{2}|\d{2})\b/);
   if (m) {
-    const [, mon, d, y] = m;
+    const [, mon, d, rawY] = m;
     const monthNum = MONTHS[mon];
     if (monthNum && +d >= 1 && +d <= 31) {
-      return `${y}-${monthNum}-${d.padStart(2, '0')}`;
+      const fullYear = rawY.length === 2 ? resolveTwoDigitYear(parseInt(rawY, 10), kind) : rawY;
+      return `${fullYear}-${monthNum}-${d.padStart(2, '0')}`;
     }
   }
 
@@ -127,7 +143,7 @@ export function normalizeVisualDate(raw: string): string | null {
     const mo = parseInt(m[2], 10);
     const yy = parseInt(m[3], 10);
     if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) {
-      const fullYear = yy <= 40 ? 2000 + yy : 1900 + yy;
+      const fullYear = resolveTwoDigitYear(yy, kind);
       return `${fullYear}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
     }
   }
@@ -139,8 +155,8 @@ function extractAllDatesFromText(text: string): string[] {
   const results: string[] = [];
   const patterns = [
     /\b(?:19|20)\d{2}[-./]\d{1,2}[-./]\d{1,2}\b/g,
-    /\b\d{1,2}\s+[A-Za-z\u00C0-\u024F]{3,6}(?:\/[A-Za-z\u00C0-\u024F]{2,6})?\s+(?:19|20)\d{2}\b/g,
-    /\b[A-Za-z\u00C0-\u024F]{3,6}\s+\d{1,2},?\s+(?:19|20)\d{2}\b/g,
+    /\b\d{1,2}\s+[A-Za-z\u00C0-\u024F]{3,6}(?:\/[A-Za-z\u00C0-\u024F]{2,6})?\s+(?:(?:19|20)?\d{2})\b/g,
+    /\b[A-Za-z\u00C0-\u024F]{3,6}\s+\d{1,2},?\s+(?:(?:19|20)?\d{2})\b/g,
     /\b\d{1,2}(?:[-./]|\s+)\d{1,2}(?:[-./]|\s+)(?:19|20)\d{2}\b/g,
   ];
   for (const p of patterns) {
@@ -190,7 +206,7 @@ const LABEL_RULES: LabelRule[] = [
     field: 'surname',
     patterns: [
       /\b(?:primer\s*apellido|segundo\s*apellido|1er\.?\s*apellido|2[oº]\.?\s*apellido)\b/i,
-      /\b(?:prezime|prazim[eo]|surname|sumarre|sumame|sumam[ao]|last\s*name|family\s*name|familienname|nachname|apell?i?dos?|cognome|nazwisko|achternaam|geslachtsnaam|pavard[eė]|p[rř][ií]jmen[ií]|vezet[eé]kn[eé]v|efternamn|etternavn)\b/i,
+      /\b(?:prezime|prazim[eo]|surnam[ae]?|sumarre|sumam[aoe]?|last\s*name|family\s*name|familienname|nachname|apell?i?dos?|cognome|nazwisko|achternaam|geslachtsnaam|pavard[eė]|p[rř][ií]jmen[ií]|vezet[eé]kn[eé]v|efternamn|etternavn)\b/i,
       /(?<![A-Za-z\u00C0-\u024F])nom(?:\s*de\s*famille)?(?![A-Za-z\u00C0-\u024F])/i,
       /^(?:1[.)]?\s*)?(?:surname|nom|name)\b/i,
     ],
@@ -211,7 +227,7 @@ const LABEL_RULES: LabelRule[] = [
   {
     field: 'documentNumber',
     patterns: [
-      /\b(?:br\.?\s*putovnice|passport\s*no\.?|pasaporte\s*n[°o]?|passeport\s*n[°o]?|pass-?nr\.?|document\s*(?:no\.?|number|id)|card\s*no\.?|id\s*number|dl\s*no\.?|licen[cs]e\s*(?:no\.?|number)|no\.?\s*du\s*passeport|reisepass\s*nr|n[uú]mero\s*(?:del\s*)?documento|paso\s*nr|č[ií]slo\s*pasu)\b/i,
+      /\b(?:br\.?\s*putovnice|passport\s*(?:no\.?|number|n[°o]?)|pasaporte\s*n[°o]?|passeport\s*n[°o]?|pass-?nr\.?|document\s*(?:no\.?|number|id)|card\s*no\.?|id\s*number|dl\s*no\.?|licen[cs]e\s*(?:no\.?|number)|n[°o]?\.?\s*(?:du|de)\s*passeport|reisepass\s*nr|n[uú]mero\s*(?:del\s*)?documento|paso\s*nr|č[ií]slo\s*pasu)\b/i,
       /^(?:4d|5)[.)]\s*/i,
     ],
   },
@@ -262,7 +278,7 @@ const LABEL_RULES: LabelRule[] = [
   {
     field: 'dateOfExpiry',
     patterns: [
-      /\b(?:(?:datum\s*)?isteka(?:\s*valj\w*)?|date\s*of\s*expir(?:y|ation)|expir(?:y|es|ation)(?:\s*date)?|valid\s*(?:until|thru|to)|exp|date\s*d['’]expiration|g[uü]ltig\s*bis|fecha\s*de\s*caducidad|data\s*de\s*validade|scadenza|data\s*wa[zż]no[sś]ci|galioja\s*iki|platnost\s*do|geldig\s*tot)\b/i,
+      /\b(?:(?:datum\s*)?isteka(?:\s*valj\w*)?|[dn]ate\s*of\s*expir(?:y|ation)|expir(?:y|es|ation)(?:\s*date)?|valid\s*(?:until|thru|to)|exp|date\s*d['’]expiration|g[uü]ltig\s*bis|fecha\s*de\s*caducidad|data\s*de\s*validade|scadenza|data\s*wa[zż]no[sś]ci|galioja\s*iki|platnost\s*do|geldig\s*tot)\b/i,
       /^(?:4b)[.)]\s*/i,
     ],
   },
@@ -320,13 +336,25 @@ const STOP_LABEL_PATTERNS: RegExp[] = [
   /\b(?:doktorgrad|doctoral\s*degr|degn?\s*ree|grade\s*de\s*docteur|ordens|rdens|oder\s*k[uü]nst|k[uü]nstlername|kinermamo|kinlenamo|kintlemamo|lername|no[em]\s+de\s+religion|rotgious|otgious|religious\s*name|stage\s*or\s*pen|nom\s*d['’]?artiste|pseudonyn|pseudonym|signature|unterschrift|firma\s*del\s*titular|holder['’]?s\s*sig(?:nature)?|(?:vlastoru[cč]n[io]\s*|mastoru[cč]n[io]\s*)?p[ao]tp[il]{1,2}[sz]?|para[sš]as|podpis)\b/i,
 ];
 
+function isLabelOnlyTail(tail: string, patterns: RegExp[]): boolean {
+  if (!tail) return false;
+  return (
+    patterns.some((p) => p.test(tail)) ||
+    STOP_LABEL_PATTERNS.some((p) => p.test(tail))
+  );
+}
+
 function stripMatchedLabel(line: string, patterns: RegExp[]): string {
   const colonIdx = line.indexOf(':');
   if (colonIdx !== -1 && colonIdx < 40 && !/[(\[\/|!]/.test(line.slice(0, colonIdx))) {
-    return line.slice(colonIdx + 1).trim();
+    const afterColon = line.slice(colonIdx + 1).trim();
+    // Do not return bare multilingual label fragments when Tesseract misreads "/" as ":"
+    // (e.g. "sumam: Nom" on Croatia specimen headers).
+    if (!isLabelOnlyTail(afterColon, patterns)) {
+      return afterColon;
+    }
   }
 
-  // Without a colon, printed VIZ labels always precede values; never return leading noise before a trailing keyword
   let maxEnd = 0;
   for (const pattern of patterns) {
     const globalPat = new RegExp(
@@ -349,7 +377,13 @@ function stripMatchedLabel(line: string, patterns: RegExp[]): string {
 }
 
 function isMultilingualHeaderLine(line: string, matchedRule: LabelRule): boolean {
-  if (line.includes(':') && !/[(\[\/|!]/.test(line.slice(0, line.indexOf(':')))) return false;
+  const colonIdx = line.indexOf(':');
+  if (colonIdx !== -1 && !/[(\[\/|!]/.test(line.slice(0, colonIdx))) {
+    const afterColon = line.slice(colonIdx + 1).trim();
+    if (!isLabelOnlyTail(afterColon, matchedRule.patterns)) {
+      return false;
+    }
+  }
   if (/[\/|]/.test(line) && !/\d{1,2}\/\d{1,2}/.test(line)) {
     return true;
   }
@@ -398,13 +432,19 @@ function cleanVisualValue(val: string, preserveTrailingDigit = false): string {
   if (!preserveTrailingDigit) {
     out = out.replace(/\s+\d$/g, '');
   } else {
-    // Strip watermark hyphens/dots right before house numbers while preserving "DORFSTR. 23"
     out = out
       .replace(/([A-Z\u00C0-\u024F]{2,}STRASSE)[-.\s]+\s*(\d)/gi, '$1 $2')
       .replace(/([A-Z\u00C0-\u024F]{3,})[-~]\s+(\d)/gi, '$1 $2')
       .replace(/(\d)\.$/, '$1');
   }
   return out.replace(/\s+/g, ' ').trim();
+}
+
+function normalizeDocNumberValue(raw: string): string {
+  return cleanVisualValue(raw, true)
+    .replace(/[§$]/g, 'S')
+    .replace(/\s+/g, '')
+    .toUpperCase();
 }
 
 function detectDocumentTypeHint(text: string): DocumentType | null {
@@ -559,15 +599,24 @@ export function parseVizText(
               if (isAnyLabelLine(cand.text)) break;
               if (cand.text.length < minCandLen) continue;
 
-              if (rule.field === 'placeOfBirth' && !isCleanPlacePart(cand.text)) {
-                if (columnCandidates.length > 0) break;
-                continue;
+              if (rule.field === 'placeOfBirth') {
+                if (!isCleanPlacePart(cand.text)) {
+                  if (columnCandidates.length > 0) break;
+                  continue;
+                }
+                if (firstCandX !== null && Math.abs(cand.bbox.x0 - firstCandX) > 85) {
+                  continue;
+                }
+                if (lastCandBox !== null) {
+                  const prevLineH = Math.max(14, lastCandBox.y1 - lastCandBox.y0);
+                  if (cand.bbox.y0 - lastCandBox.y1 > prevLineH * 1.4) {
+                    break;
+                  }
+                }
               }
 
               if (rule.field === 'surname') {
-                // Skip secondary birth-name markers like "[b] GABLER" or "» GABLER"
                 if (/^(?:\[b\]|[»*])/i.test(cand.text)) break;
-                // Stop if a mixed-case header line follows an all-caps surname
                 if (
                   columnCandidates.length > 0 &&
                   /^[A-Z\u00C0-\u024F\s-]+$/.test(columnCandidates[0]) &&
@@ -582,8 +631,6 @@ export function parseVizText(
               }
 
               if (rule.field === 'address') {
-                // Multi-line address lines are left-aligned and tightly stacked vertically;
-                // stop if a large vertical gap separates the address block from lower watermark noise
                 if (cand.text.length < 3 && !/^\d+$/.test(cand.text)) continue;
                 if (firstCandX !== null && Math.abs(cand.bbox.x0 - firstCandX) > 85) {
                   continue;
@@ -641,9 +688,15 @@ export function parseVizText(
             rule.field === 'dateOfIssue' ||
             rule.field === 'dateOfExpiry'
           ) {
-            let iso = normalizeVisualDate(value);
+            const dateKind =
+              rule.field === 'dateOfBirth'
+                ? 'birth'
+                : rule.field === 'dateOfIssue'
+                  ? 'issue'
+                  : 'expiry';
+            let iso = normalizeVisualDate(value, dateKind);
             if (!iso && columnCandidates.length > 0) {
-              iso = normalizeVisualDate(columnCandidates[0]);
+              iso = normalizeVisualDate(columnCandidates[0], dateKind);
             }
             if (iso && !data[rule.field]) {
               data[rule.field] = iso;
@@ -655,6 +708,22 @@ export function parseVizText(
             }
             if (parsedSex && !data.sex) {
               data.sex = parsedSex;
+            }
+          } else if (rule.field === 'documentNumber') {
+            let rawDoc = value;
+            if (
+              /\b(?:type|country\s*code|c[oó]digo|vrsta|oznaka)\b/i.test(line) &&
+              /\s+/.test(rawDoc)
+            ) {
+              const docTok = rawDoc
+                .split(/\s+/)
+                .reverse()
+                .find((t) => /[A-Z0-9§$-]{5,}/i.test(t) && /\d/.test(t));
+              if (docTok) rawDoc = docTok;
+            }
+            const cleanedDoc = normalizeDocNumberValue(rawDoc);
+            if (cleanedDoc && !data.documentNumber) {
+              data.documentNumber = cleanedDoc;
             }
           } else if (rule.field === 'address' || rule.field === 'placeOfBirth') {
             const preserveDigit = rule.field === 'address';
@@ -776,9 +845,9 @@ export function parseVizText(
 
   if (!data.documentNumber) {
     for (const line of lines) {
-      const dlMatch = line.match(/\b(?:DL|ID|NO\.?|DOC)\s*[:#]?\s*([A-Z0-9-]{6,18})\b/i);
+      const dlMatch = line.match(/\b(?:DL|ID|NO\.?|DOC)\s*[:#]?\s*([A-Z0-9§$-]{6,18})\b/i);
       if (dlMatch && /\d/.test(dlMatch[1])) {
-        data.documentNumber = dlMatch[1].toUpperCase();
+        data.documentNumber = normalizeDocNumberValue(dlMatch[1]);
         break;
       }
     }
