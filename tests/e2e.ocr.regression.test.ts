@@ -12,6 +12,8 @@ import {
 const UTOPIA_PATH = resolveRepoPath('public/assets/aistudio/87c86sbojo3e1_a5632450.png');
 const CROATIA_PATH = resolveRepoPath('public/assets/aistudio/Croatian_passport_data_page_09954fff.jpg');
 const SPAIN_PATH = resolveRepoPath('public/assets/aistudio/Spanish_passport_data_page_sample_eb3acb0d.jpg');
+const ROMANIA_PATH = resolveRepoPath('public/assets/aistudio/Romanian_passport_2024_model_datapage_a569bfe4.jpg');
+const BELGIUM_PATH = resolveRepoPath('public/assets/aistudio/Belgium_passport_biodata_d84a9042.jpg');
 
 const OFFLINE_SCANNER_CONFIG = {
   langPath: process.cwd(),
@@ -26,12 +28,16 @@ describe('End-to-End Real OCR Regression & Speed Benchmark Suite', () => {
   let tmpDir: string;
   let utoVariants: ReturnType<typeof generateImageVariants>;
   let hrvVariants: ReturnType<typeof generateImageVariants>;
+  let roVariants: ReturnType<typeof generateImageVariants>;
+  let beVariants: ReturnType<typeof generateImageVariants>;
 
   beforeAll(async () => {
     installNodeCanvasShim();
     tmpDir = createTempWorkDir('docscan-e2e-');
     utoVariants = generateImageVariants(UTOPIA_PATH, tmpDir, 'uto');
     hrvVariants = generateImageVariants(CROATIA_PATH, tmpDir, 'hrv');
+    roVariants = generateImageVariants(ROMANIA_PATH, tmpDir, 'ro');
+    beVariants = generateImageVariants(BELGIUM_PATH, tmpDir, 'be');
 
     scanner = new DocumentScanner(OFFLINE_SCANNER_CONFIG);
     await scanner.warmup();
@@ -109,7 +115,63 @@ describe('End-to-End Real OCR Regression & Speed Benchmark Suite', () => {
     expect(res.portraitDataUrl).toMatch(/^data:image\/png;base64,/);
   });
 
-  it('recovers Utopia & Croatia identities across 90°, 180°, 270° rotated, tilted, shadowed, and warped tabletop images', async () => {
+  it('extracts Romanian 2024 passport specimen accurately across both OCR-B and standard MRZ models', async () => {
+    const img = loadFileAsImageInput(ROMANIA_PATH);
+
+    for (const mrzModel of ['ocrb', 'standard'] as const) {
+      const res = await scanner.scan(img, {
+        perspectiveCorrection: true,
+        autoRotate: true,
+        enableBarcodePass: false,
+        mrzModel,
+        vizLanguageMode: 'standard',
+      });
+
+      expect(res.documentFormat, mrzModel).toBe('TD3');
+      expect(res.issuingCountry, mrzModel).toBe('ROU');
+      expect(res.nationality, mrzModel).toBe('ROU');
+      expect(res.documentNumber, mrzModel).toBe('040021039');
+      expect(res.personalNumber, mrzModel).toBe('4800101017005');
+      expect(res.surname, mrzModel).toBe('POPESCU');
+      expect(res.givenNames, mrzModel).toBe('MIHAELA STEFANIA');
+      expect(res.dateOfBirth, mrzModel).toBe('1980-01-01');
+      expect(res.dateOfExpiry, mrzModel).toBe('2034-09-02');
+      expect(res.sex, mrzModel).toBe('F');
+      expect(res.mrz?.allCheckDigitsValid, mrzModel).toBe(true);
+      expect(res.rawMrzText, mrzModel).toContain('040021039');
+      expect(res.portraitDataUrl, mrzModel).toMatch(/^data:image\/png;base64,/);
+    }
+  });
+
+  it('extracts Belgian passport specimen accurately across both OCR-B and standard MRZ models', async () => {
+    const img = loadFileAsImageInput(BELGIUM_PATH);
+
+    for (const mrzModel of ['ocrb', 'standard'] as const) {
+      const res = await scanner.scan(img, {
+        perspectiveCorrection: true,
+        autoRotate: true,
+        enableBarcodePass: false,
+        mrzModel,
+        vizLanguageMode: 'standard',
+      });
+
+      expect(res.documentFormat, mrzModel).toBe('TD3');
+      expect(res.issuingCountry, mrzModel).toBe('BEL');
+      expect(res.nationality, mrzModel).toBe('XXB');
+      expect(res.documentNumber, mrzModel).toBe('TA000000');
+      expect(res.surname, mrzModel).toBe('SPECIMEN');
+      expect(res.givenNames, mrzModel).toBe('EMMA');
+      expect(res.dateOfBirth, mrzModel).toBe('1984-12-25');
+      expect(res.dateOfExpiry, mrzModel).toBe('2019-03-27');
+      expect(res.sex, mrzModel).toBe('F');
+      expect(res.mrz?.allCheckDigitsValid, mrzModel).toBe(true);
+      expect(res.specimen?.isSpecimen, mrzModel).toBe(true);
+      expect(res.rawMrzText, mrzModel).toContain('TA000000');
+      expect(res.portraitDataUrl, mrzModel).toMatch(/^data:image\/png;base64,/);
+    }
+  });
+
+  it('recovers Utopia, Croatia, Romania & Belgium identities across rotated, tilted, shadowed, and warped tabletop images', async () => {
     const cases: Array<{
       name: string;
       path: string;
@@ -117,6 +179,7 @@ describe('End-to-End Real OCR Regression & Speed Benchmark Suite', () => {
       expectedCountry: string;
       expectedSurname: string;
       expectPerspective?: boolean;
+      vizLanguageMode?: 'standard';
     }> = [
       {
         name: 'Utopia 180° upside down',
@@ -161,6 +224,88 @@ describe('End-to-End Real OCR Regression & Speed Benchmark Suite', () => {
         expectedSurname: 'QUEST',
         expectPerspective: true,
       },
+      {
+        name: 'Romania 180° upside down',
+        path: roVariants.rot180,
+        expectedDoc: '040021039',
+        expectedCountry: 'ROU',
+        expectedSurname: 'POPESCU',
+        vizLanguageMode: 'standard',
+      },
+      {
+        name: 'Romania 90° clockwise',
+        path: roVariants.rot90,
+        expectedDoc: '040021039',
+        expectedCountry: 'ROU',
+        expectedSurname: 'POPESCU',
+        vizLanguageMode: 'standard',
+      },
+      {
+        name: 'Romania +9° tilted',
+        path: roVariants.tilted10,
+        expectedDoc: '040021039',
+        expectedCountry: 'ROU',
+        expectedSurname: 'POPESCU',
+        vizLanguageMode: 'standard',
+      },
+      {
+        name: 'Romania heavy directional shadow',
+        path: roVariants.shadowed,
+        expectedDoc: '040021039',
+        expectedCountry: 'ROU',
+        expectedSurname: 'POPESCU',
+        vizLanguageMode: 'standard',
+      },
+      {
+        name: 'Romania tabletop perspective warp',
+        path: roVariants.warpedTabletop,
+        expectedDoc: '040021039',
+        expectedCountry: 'ROU',
+        expectedSurname: 'POPESCU',
+        expectPerspective: true,
+        vizLanguageMode: 'standard',
+      },
+      {
+        name: 'Belgium 180° upside down',
+        path: beVariants.rot180,
+        expectedDoc: 'TA000000',
+        expectedCountry: 'BEL',
+        expectedSurname: 'SPECIMEN',
+        vizLanguageMode: 'standard',
+      },
+      {
+        name: 'Belgium 270° rotated',
+        path: beVariants.rot270,
+        expectedDoc: 'TA000000',
+        expectedCountry: 'BEL',
+        expectedSurname: 'SPECIMEN',
+        vizLanguageMode: 'standard',
+      },
+      {
+        name: 'Belgium +9° tilted',
+        path: beVariants.tilted10,
+        expectedDoc: 'TA000000',
+        expectedCountry: 'BEL',
+        expectedSurname: 'SPECIMEN',
+        vizLanguageMode: 'standard',
+      },
+      {
+        name: 'Belgium heavy directional shadow',
+        path: beVariants.shadowed,
+        expectedDoc: 'TA000000',
+        expectedCountry: 'BEL',
+        expectedSurname: 'SPECIMEN',
+        vizLanguageMode: 'standard',
+      },
+      {
+        name: 'Belgium tabletop perspective warp',
+        path: beVariants.warpedTabletop,
+        expectedDoc: 'TA000000',
+        expectedCountry: 'BEL',
+        expectedSurname: 'SPECIMEN',
+        expectPerspective: true,
+        vizLanguageMode: 'standard',
+      },
     ];
 
     for (const tc of cases) {
@@ -169,6 +314,7 @@ describe('End-to-End Real OCR Regression & Speed Benchmark Suite', () => {
         perspectiveCorrection: true,
         autoRotate: true,
         enableBarcodePass: false,
+        vizLanguageMode: tc.vizLanguageMode,
       });
 
       expect(res.issuingCountry, tc.name).toBe(tc.expectedCountry);
@@ -179,7 +325,7 @@ describe('End-to-End Real OCR Regression & Speed Benchmark Suite', () => {
         expect(res.perspective?.applied, tc.name).toBe(true);
       }
     }
-  }, 120000);
+  }, 240000);
 
   it('supports Fast MRZ-Only and skipVizPass modes with higher throughput and full MRZ accuracy', async () => {
     const utoImg = loadFileAsImageInput(UTOPIA_PATH);

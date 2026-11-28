@@ -114,6 +114,13 @@ async function blobToDataUrl(blob) {
   });
 }
 
+function computeChromaCompensatedLuma(r, g, b, alpha) {
+  const max = r > g ? (r > b ? r : b) : g > b ? g : b;
+  const min = r < g ? (r < b ? r : b) : g < b ? g : b;
+  const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+  return Math.min(255, Math.round(lum + alpha * (max - min)));
+}
+
 function dist(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
@@ -296,7 +303,7 @@ function handleSampleGrayscale(bitmap, maxDim) {
   return { gray, width, height };
 }
 
-function flattenShadowIlluminationBuffer(gray, width, height) {
+function flattenShadowIlluminationBuffer(gray, width, height, minSpread = 28) {
   if (width < 32 || height < 24 || gray.length < width * height) {
     return;
   }
@@ -348,7 +355,7 @@ function flattenShadowIlluminationBuffer(gray, width, height) {
     }
   }
 
-  if (bgMax - bgMin < 28) {
+  if (bgMax - bgMin < minSpread) {
     return;
   }
 
@@ -398,8 +405,8 @@ function detectDynamicMrzBand(gray, width, height) {
 
   const yStart = Math.floor(height * 0.48);
   const yEnd = Math.min(height - 2, Math.floor(height * 0.99));
-  const xStart = Math.floor(width * 0.025);
-  const xEnd = Math.ceil(width * 0.975);
+  const xStart = Math.floor(width * 0.02);
+  const xEnd = Math.ceil(width * 0.98);
   const stepX = Math.max(1, Math.floor((xEnd - xStart) / 480));
 
   const candidateRows = [];
@@ -415,9 +422,10 @@ function detectDynamicMrzBand(gray, width, height) {
     rowSamples.sort((a, b) => a - b);
     const rowBg = rowSamples[Math.floor(rowSamples.length * 0.88)];
     const rowLow = rowSamples[Math.floor(rowSamples.length * 0.02)];
-    if (rowBg - rowLow < 52) continue;
+    const diff = rowBg - rowLow;
+    if (diff < 52) continue;
 
-    const threshold = Math.max(42, rowBg - Math.max(36, (rowBg - rowLow) * 0.46));
+    const threshold = Math.max(42, rowBg - Math.max(36, diff * 0.46));
     let transitions = 0;
     let inkSamples = 0;
     let prevDark = false;
@@ -441,7 +449,7 @@ function detectDynamicMrzBand(gray, width, height) {
     const spanRatio = (lastInkX - firstInkX) / width;
 
     if (transitions >= 34 && inkFrac >= 0.03 && inkFrac <= 0.46 && spanRatio >= 0.56) {
-      candidateRows.push({ y, transitions, spanRatio });
+      candidateRows.push({ y, transitions, spanRatio, diff });
     }
   }
 
@@ -450,64 +458,100 @@ function detectDynamicMrzBand(gray, width, height) {
   }
 
   const maxGap = Math.max(6, Math.round(height * 0.055));
-  const clusters = [];
-  let cur = {
-    top: candidateRows[0].y,
-    bottom: candidateRows[0].y,
-    count: 1,
-    transSum: candidateRows[0].transitions,
-    spanSum: candidateRows[0].spanRatio,
+  const selectBestCluster = (rows) => {
+    if (rows.length < 4) return null;
+    const clusters = [];
+    let cur = {
+      top: rows[0].y,
+      bottom: rows[0].y,
+      count: 1,
+      transSum: rows[0].transitions,
+      spanSum: rows[0].spanRatio,
+    };
+
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i];
+      if (row.y - cur.bottom <= maxGap) {
+        cur.bottom = row.y;
+        cur.count++;
+        cur.transSum += row.transitions;
+        cur.spanSum += row.spanRatio;
+      } else {
+        clusters.push(cur);
+        cur = {
+          top: row.y,
+          bottom: row.y,
+          count: 1,
+          transSum: row.transitions,
+          spanSum: row.spanRatio,
+        };
+      }
+    }
+    clusters.push(cur);
+
+    let best = null;
+    let bestScore = -1;
+    const maxCountCap = Math.max(24, Math.round(height * 0.14));
+
+    for (let i = 0; i < clusters.length; i++) {
+      const c = clusters[i];
+      const spanNorm = (c.bottom - c.top + 1) / height;
+      const topNorm = c.top / height;
+      const bottomNorm = c.bottom / height;
+      if (spanNorm < 0.04 || spanNorm > 0.44 || bottomNorm < 0.75 || c.count < 6) {
+        continue;
+      }
+
+      const avgTrans = c.transSum / c.count;
+      const avgSpan = c.spanSum / c.count;
+      const effectiveRows = Math.min(c.count, maxCountCap);
+      const zoneWeight =
+        bottomNorm >= 0.82 && topNorm >= 0.58
+          ? 3.2
+          : bottomNorm >= 0.82
+            ? 1.8
+            : 0.75;
+      const metricWeight =
+        (0.6 + Math.min(1.4, avgTrans / 90)) * (avgSpan >= 0.74 ? 1.25 : 1.0);
+      const score = effectiveRows * zoneWeight * metricWeight;
+
+      if (score > bestScore) {
+        bestScore = score;
+        best = c;
+      }
+    }
+    return best;
   };
 
-  for (let i = 1; i < candidateRows.length; i++) {
-    const row = candidateRows[i];
-    if (row.y - cur.bottom <= maxGap) {
-      cur.bottom = row.y;
-      cur.count++;
-      cur.transSum += row.transitions;
-      cur.spanSum += row.spanRatio;
-    } else {
-      clusters.push(cur);
-      cur = {
-        top: row.y,
-        bottom: row.y,
-        count: 1,
-        transSum: row.transitions,
-        spanSum: row.spanRatio,
-      };
-    }
-  }
-  clusters.push(cur);
+  let best = selectBestCluster(candidateRows);
 
-  let best = null;
-  let bestScore = -1;
-  const maxCountCap = Math.max(24, Math.round(height * 0.14));
+  const needsStrongInkRefinement =
+    !best ||
+    (best.bottom - best.top + 1) / height > 0.25 ||
+    best.top / height < 0.58;
 
-  for (let i = 0; i < clusters.length; i++) {
-    const c = clusters[i];
-    const spanNorm = (c.bottom - c.top + 1) / height;
-    const topNorm = c.top / height;
-    const bottomNorm = c.bottom / height;
-    if (spanNorm < 0.04 || spanNorm > 0.44 || bottomNorm < 0.75 || c.count < 6) {
-      continue;
-    }
-
-    const avgTrans = c.transSum / c.count;
-    const avgSpan = c.spanSum / c.count;
-    const effectiveRows = Math.min(c.count, maxCountCap);
-    const zoneWeight =
-      bottomNorm >= 0.82 && topNorm >= 0.58
-        ? 3.2
-        : bottomNorm >= 0.82
-          ? 1.8
-          : 0.75;
-    const metricWeight =
-      (0.6 + Math.min(1.4, avgTrans / 90)) * (avgSpan >= 0.74 ? 1.25 : 1.0);
-    const score = effectiveRows * zoneWeight * metricWeight;
-
-    if (score > bestScore) {
-      bestScore = score;
-      best = c;
+  if (needsStrongInkRefinement && candidateRows.length >= 10) {
+    const diffs = candidateRows.map((r) => r.diff).sort((a, b) => a - b);
+    const p90Diff = diffs[Math.floor(diffs.length * 0.9)] ?? 0;
+    if (p90Diff >= 120) {
+      const minDiff = Math.max(95, p90Diff * 0.62);
+      const refined = selectBestCluster(
+        candidateRows.filter((r) => r.diff >= minDiff && r.transitions >= 52)
+      );
+      if (refined) {
+        const refinedSpan = (refined.bottom - refined.top + 1) / height;
+        const refinedTop = refined.top / height;
+        const refinedBottom = refined.bottom / height;
+        if (
+          !best ||
+          (refinedSpan >= 0.05 &&
+            refinedSpan <= 0.26 &&
+            refinedBottom >= 0.82 &&
+            refinedTop >= 0.58)
+        ) {
+          best = refined;
+        }
+      }
     }
   }
 
@@ -533,6 +577,18 @@ function detectDynamicMrzBand(gray, width, height) {
   };
 }
 
+function buildMrzLocatorGrayscale(ctx, width, height, applyFlatten) {
+  const rgba = ctx.getImageData(0, 0, width, height).data;
+  const gray = new Uint8ClampedArray(width * height);
+  for (let i = 0, p = 0; i < rgba.length; i += 4, p++) {
+    gray[p] = computeChromaCompensatedLuma(rgba[i], rgba[i + 1], rgba[i + 2], 0.68);
+  }
+  if (applyFlatten) {
+    flattenShadowIlluminationBuffer(gray, width, height, 28);
+  }
+  return gray;
+}
+
 function applyContrastGrayscale(ctx, width, height, writeBackPixels) {
   const imageData = ctx.getImageData(0, 0, width, height);
   const data = imageData.data;
@@ -542,7 +598,7 @@ function applyContrastGrayscale(ctx, width, height, writeBackPixels) {
     gray[p] = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
   }
 
-  flattenShadowIlluminationBuffer(gray, width, height);
+  flattenShadowIlluminationBuffer(gray, width, height, 28);
 
   if (!writeBackPixels) {
     return gray;
@@ -607,15 +663,21 @@ function applyRowFlatFieldMrzNormalization(ctx, width, height, borderPad, enhanc
   const totalPixels = width * height;
   const gray = new Uint8ClampedArray(totalPixels);
 
-  for (let i = 0, p = 0; i < data.length; i += 4, p++) {
-    gray[p] = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
-  }
   if (!enhance) {
+    for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+      gray[p] = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
+    }
     return { data: gray, width, height };
   }
 
-  const xStart = Math.max(borderPad, Math.floor(width * 0.03));
-  const xEnd = Math.min(width - borderPad, Math.ceil(width * 0.97));
+  for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+    gray[p] = computeChromaCompensatedLuma(data[i], data[i + 1], data[i + 2], 0.68);
+  }
+
+  flattenShadowIlluminationBuffer(gray, width, height, 36);
+
+  const xStart = Math.max(borderPad, Math.floor(width * 0.02));
+  const xEnd = Math.min(width - borderPad, Math.ceil(width * 0.98));
   const yStart = borderPad;
   const yEnd = height - borderPad;
 
@@ -734,7 +796,7 @@ function trimWhiteRotationMargins(canvas) {
 }
 
 async function buildMrzStrip(origCanvas, targetW, targetH, topRatio, bottomRatio, enhance, encodeDataUrl) {
-  const srcX = Math.round(targetW * 0.018);
+  const srcX = Math.round(targetW * 0.004);
   const srcW = Math.max(1, targetW - srcX * 2);
   const srcY = Math.round(targetH * topRatio);
   const srcH = Math.max(1, Math.round(targetH * bottomRatio) - srcY);
@@ -842,17 +904,8 @@ async function handlePreprocessDocument(bitmap, opts) {
 
   if (skipFullPage) {
     if (!skipMrzStrips) {
-      if (preprocess) {
-        const enhGray = applyContrastGrayscale(activeOrigCtx, targetW, targetH, false);
-        mrzBand = detectDynamicMrzBand(enhGray, targetW, targetH);
-      } else {
-        const rgba = activeOrigCtx.getImageData(0, 0, targetW, targetH).data;
-        const rawGray = new Uint8ClampedArray(targetW * targetH);
-        for (let i = 0, p = 0; i < rgba.length; i += 4, p++) {
-          rawGray[p] = Math.round(0.299 * rgba[i] + 0.587 * rgba[i + 1] + 0.114 * rgba[i + 2]);
-        }
-        mrzBand = detectDynamicMrzBand(rawGray, targetW, targetH);
-      }
+      const locatorGray = buildMrzLocatorGrayscale(activeOrigCtx, targetW, targetH, preprocess);
+      mrzBand = detectDynamicMrzBand(locatorGray, targetW, targetH);
     }
     originalBlob = await originalBlobPromise;
     if (originalBlob && includePreviews) {
@@ -865,9 +918,10 @@ async function handlePreprocessDocument(bitmap, opts) {
     enhCtx.drawImage(origCanvas, 0, 0);
 
     if (preprocess) {
-      const enhGray = applyContrastGrayscale(enhCtx, targetW, targetH, true);
+      applyContrastGrayscale(enhCtx, targetW, targetH, true);
       if (!skipMrzStrips) {
-        mrzBand = detectDynamicMrzBand(enhGray, targetW, targetH);
+        const locatorGray = buildMrzLocatorGrayscale(activeOrigCtx, targetW, targetH, true);
+        mrzBand = detectDynamicMrzBand(locatorGray, targetW, targetH);
       }
       const [origRes, enhRes] = await Promise.all([
         originalBlobPromise,
@@ -877,12 +931,8 @@ async function handlePreprocessDocument(bitmap, opts) {
       enhancedBlob = enhRes;
     } else {
       if (!skipMrzStrips) {
-        const rgba = enhCtx.getImageData(0, 0, targetW, targetH).data;
-        const rawGray = new Uint8ClampedArray(targetW * targetH);
-        for (let i = 0, p = 0; i < rgba.length; i += 4, p++) {
-          rawGray[p] = Math.round(0.299 * rgba[i] + 0.587 * rgba[i + 1] + 0.114 * rgba[i + 2]);
-        }
-        mrzBand = detectDynamicMrzBand(rawGray, targetW, targetH);
+        const locatorGray = buildMrzLocatorGrayscale(activeOrigCtx, targetW, targetH, false);
+        mrzBand = detectDynamicMrzBand(locatorGray, targetW, targetH);
       }
       originalBlob = needOriginal ? await originalBlobPromise : await canvasToBlob(origCanvas);
       enhancedBlob = originalBlob;

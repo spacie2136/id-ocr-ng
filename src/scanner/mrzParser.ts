@@ -46,6 +46,7 @@ const DIGIT_CONFUSIONS: Record<string, string[]> = {
   O: ['0'],
   D: ['0'],
   Q: ['0'],
+  C: ['0'],
   I: ['1', '9'],
   L: ['1'],
   T: ['1', '7'],
@@ -102,6 +103,10 @@ function fixNumericField(raw: string): string {
     .replace(/B/g, '8');
 }
 
+function fixCheckDigitChar(raw: string): string {
+  return fixNumericField(raw).replace(/C/g, '0');
+}
+
 function fixAlphaField(raw: string): string {
   return raw
     .replace(/0/g, 'O')
@@ -120,7 +125,7 @@ function isValidMrzSixDigitDate(digits: string): boolean {
 }
 
 function repairDateFieldWithCheckDigit(raw: string, actualCheckDigit: string): string {
-  const check = fixNumericField(actualCheckDigit);
+  const check = fixCheckDigitChar(actualCheckDigit);
   const baseDigits = fixNumericField(raw);
   if (!/^\d$/.test(check) || raw.length !== 6) return baseDigits;
 
@@ -181,22 +186,26 @@ function repairDateFieldWithCheckDigit(raw: string, actualCheckDigit: string): s
   return baseDigits;
 }
 
+function softNumericFix(s: string): string {
+  return s
+    .replace(/[ODQ]/g, '0')
+    .replace(/[IL]/g, '1')
+    .replace(/Z/g, '2')
+    .replace(/S/g, '5')
+    .replace(/G/g, '6')
+    .replace(/B/g, '8');
+}
+
 function repairFieldWithCheckDigit(raw: string, actualCheckDigit: string): string {
-  const check = fixNumericField(actualCheckDigit);
+  const check = fixCheckDigitChar(actualCheckDigit);
   if (!/^\d$/.test(check)) return raw;
   if (computeCheckDigit(raw) === check) return raw;
 
+  const roundZeroFixed = raw.replace(/[OQ]/g, '0');
+  if (computeCheckDigit(roundZeroFixed) === check) return roundZeroFixed;
+
   const zeroFixed = raw.replace(/[ODQ]/g, '0');
   if (computeCheckDigit(zeroFixed) === check) return zeroFixed;
-
-  const softNumericFix = (s: string) =>
-    s
-      .replace(/[ODQ]/g, '0')
-      .replace(/[IL]/g, '1')
-      .replace(/Z/g, '2')
-      .replace(/S/g, '5')
-      .replace(/G/g, '6')
-      .replace(/B/g, '8');
 
   const prefixMatch = raw.match(/^([A-Z]{1,3})(.*)$/);
   if (prefixMatch) {
@@ -249,7 +258,7 @@ function repairSliceForCompositeCheck(
   suffix: string,
   compositeCheckRaw: string
 ): string {
-  const compositeCheck = fixNumericField(compositeCheckRaw);
+  const compositeCheck = fixCheckDigitChar(compositeCheckRaw);
   if (!/^\d$/.test(compositeCheck)) return targetSlice;
   if (computeCheckDigit(prefix + targetSlice + suffix) === compositeCheck) {
     return targetSlice;
@@ -317,10 +326,11 @@ function stripTrailingFillerNoise(rawField: string): string {
     prev = cleaned;
     cleaned = cleaned
       .replace(/<+$/g, '')
-      .replace(/<<<+[KL<]*$/g, '')
+      .replace(/(?:<+[KL]){2,}[KLC<]*$/g, '')
+      .replace(/<<<+[KLC<]*$/g, '')
+      .replace(/<+[KL]{3,}[KLC<]*$/g, '')
       .replace(/<+[KL]{2,}[KL<]*$/g, '')
       .replace(/<<[KL]$/g, '')
-      .replace(/(?:<+[KL]){3,}<*$/g, '')
       .replace(/<+$/g, '');
   }
   return cleaned;
@@ -416,7 +426,7 @@ function checkDigitEntry(
   sourceSlice: string,
   actualDigitRaw: string
 ): CheckDigitStatus {
-  const actual = fixNumericField(actualDigitRaw);
+  const actual = fixCheckDigitChar(actualDigitRaw);
   const expected = computeCheckDigit(sourceSlice);
   return {
     label,
@@ -443,23 +453,25 @@ function parseTD3Single(line1Raw: string, line2Raw: string, isVisaA = false): Mr
   let issuingCountry = fixAlphaField(line1.slice(2, 5)).replace(/</g, '');
   const { surname, surnames, givenNames, givenNamesList } = parseNames(line1.slice(5, 44));
 
-  const documentNumberCheck = line2.slice(9, 10);
-  const documentNumberRaw = repairFieldWithCheckDigit(line2.slice(0, 9), documentNumberCheck);
+  const rawDocSlice = line2.slice(0, 9);
+  const rawDocCheckChar = line2.slice(9, 10);
+  let documentNumberCheck = fixCheckDigitChar(rawDocCheckChar);
+  let documentNumberRaw = repairFieldWithCheckDigit(rawDocSlice, documentNumberCheck);
   const nationality = fixAlphaField(line2.slice(10, 13)).replace(/</g, '');
   issuingCountry = resolveSingleLetterIssuingCountry(issuingCountry, nationality);
   if (!issuingCountry && nationality) {
     issuingCountry = nationality;
   }
 
-  const dobCheck = line2.slice(19, 20);
+  const dobCheck = fixCheckDigitChar(line2.slice(19, 20));
   const dobRaw = repairDateFieldWithCheckDigit(line2.slice(13, 19), dobCheck);
   const sex = parseSex(line2.slice(20, 21));
-  const expiryCheck = line2.slice(27, 28);
+  const expiryCheck = fixCheckDigitChar(line2.slice(27, 28));
   const expiryRaw = repairDateFieldWithCheckDigit(line2.slice(21, 27), expiryCheck);
 
   let optionalData1 = isVisaA ? line2.slice(28, 44) : line2.slice(28, 42);
-  let personalCheck = isVisaA ? '' : line2.slice(42, 43);
-  const compositeCheck = isVisaA ? '' : line2.slice(43, 44);
+  let personalCheck = isVisaA ? '' : fixCheckDigitChar(line2.slice(42, 43));
+  const compositeCheck = isVisaA ? '' : fixCheckDigitChar(line2.slice(43, 44));
 
   if (!isVisaA && optionalData1.replace(/</g, '').length > 0) {
     optionalData1 = repairFieldWithCheckDigit(optionalData1, personalCheck);
@@ -467,9 +479,9 @@ function parseTD3Single(line1Raw: string, line2Raw: string, isVisaA = false): Mr
 
   if (
     !isVisaA &&
-    computeCheckDigit(documentNumberRaw) === fixNumericField(documentNumberCheck) &&
-    computeCheckDigit(dobRaw) === fixNumericField(dobCheck) &&
-    computeCheckDigit(expiryRaw) === fixNumericField(expiryCheck)
+    computeCheckDigit(documentNumberRaw) === documentNumberCheck &&
+    computeCheckDigit(dobRaw) === dobCheck &&
+    computeCheckDigit(expiryRaw) === expiryCheck
   ) {
     const compositePrefix =
       documentNumberRaw +
@@ -487,6 +499,50 @@ function parseTD3Single(line1Raw: string, line2Raw: string, isVisaA = false): Mr
     if (repairedOpt !== optionalData1) {
       optionalData1 = repairedOpt;
       personalCheck = computeCheckDigit(optionalData1);
+    }
+  }
+
+  // Recover document number + corrupted non-numeric check digit (e.g. '3' misread as 'I')
+  // or mutated leading 2-letter alpha prefix using the verified composite check digit.
+  if (
+    !isVisaA &&
+    computeCheckDigit(dobRaw) === dobCheck &&
+    computeCheckDigit(expiryRaw) === expiryCheck &&
+    /^\d$/.test(compositeCheck)
+  ) {
+    const currentComp =
+      documentNumberRaw +
+      documentNumberCheck +
+      dobRaw +
+      dobCheck +
+      expiryRaw +
+      expiryCheck +
+      optionalData1 +
+      personalCheck;
+    const compFails = computeCheckDigit(currentComp) !== compositeCheck;
+    const mutatedLeadingAlpha =
+      /^[A-Z]{2}/.test(rawDocSlice) && !/^[A-Z]{2}/.test(documentNumberRaw);
+    const docCheckCorruptedAlpha = /[^0-9]/.test(rawDocCheckChar);
+
+    if (compFails && (docCheckCorruptedAlpha || mutatedLeadingAlpha)) {
+      const docCands: string[] = [];
+      for (const prefixLen of [2, 1, 3, 0]) {
+        const prefix = rawDocSlice.slice(0, prefixLen);
+        if (prefixLen > 0 && !/^[A-Z]+$/.test(prefix)) continue;
+        docCands.push(prefix + softNumericFix(rawDocSlice.slice(prefixLen)));
+      }
+      docCands.push(rawDocSlice.replace(/[OQ]/g, '0'), rawDocSlice.replace(/[ODQ]/g, '0'));
+
+      for (const cand of docCands) {
+        const c = computeCheckDigit(cand);
+        const compCandidate =
+          cand + c + dobRaw + dobCheck + expiryRaw + expiryCheck + optionalData1 + personalCheck;
+        if (computeCheckDigit(compCandidate) === compositeCheck) {
+          documentNumberRaw = cand;
+          documentNumberCheck = c;
+          break;
+        }
+      }
     }
   }
 
@@ -596,21 +652,33 @@ function buildTd3TailVariants(prefixAdjustedLine2: string): string[] {
   return variants;
 }
 
-function scoreTd3Candidate(cand: MrzParsedData): number {
+function scoreTd3Candidate(
+  cand: MrzParsedData,
+  line1Country: string,
+  line2Raw?: string
+): number {
   let score = cand.validCount * 10 + (cand.allCheckDigitsValid ? 5 : 0);
   if (cand.dateOfBirth) score += 2;
   if (cand.dateOfExpiry) score += 2;
   if (cand.sex !== 'Unspecified') score += 1;
+  if (line1Country.length >= 2 && cand.nationality === line1Country) score += 1;
+  if (
+    line2Raw &&
+    /^[A-Z]{2}/.test(cand.documentNumber) &&
+    line2Raw.startsWith(cand.documentNumber.slice(0, 2))
+  ) {
+    score += 2;
+  }
   return score;
 }
 
 function parseTD3(line1Raw: string, line2Raw: string, isVisaA = false): MrzParsedData {
+  const line1Country = fixAlphaField(line1Raw.slice(2, 5)).replace(/</g, '');
   const base = parseTD3Single(line1Raw, line2Raw, isVisaA);
   if (isVisaA || base.allCheckDigitsValid) {
     return base;
   }
 
-  const line1Country = fixAlphaField(line1Raw.slice(2, 5)).replace(/</g, '');
   const prefixVariants = new Set<string>([line2Raw]);
 
   // Recover 1-2 extra OCR characters inserted inside the document-number slice (0..9)
@@ -632,6 +700,48 @@ function parseTD3(line1Raw: string, line2Raw: string, isVisaA = false): MrzParse
     }
   }
 
+  // Recover a single stray OCR insertion inside nationality/DOB/sex/expiry (cols 10..27)
+  // or optional data (cols 28..41), e.g. '0400210397R0OUB001014F...' or '0400210397R0U8B001014F...'
+  if (line2Raw.length >= 45 && line2Raw.length <= 47) {
+    const shiftedSexHint = /[MFX<]/.test(line2Raw[21] ?? '') || /[MFX<]/.test(line2Raw[22] ?? '');
+    const shiftedExpiryDigits = /^\d{6}/.test(fixNumericField(line2Raw.slice(22, 28)));
+    const shiftedNationalityMatch =
+      line1Country.length >= 2 &&
+      fixAlphaField(line2Raw.slice(10, 14)).includes(line1Country.slice(0, 2));
+
+    if (shiftedSexHint || shiftedExpiryDigits || shiftedNationalityMatch) {
+      for (let k = 10; k <= 27 && k < line2Raw.length; k++) {
+        prefixVariants.add(line2Raw.slice(0, k) + line2Raw.slice(k + 1));
+      }
+    }
+
+    const docCheckMatches =
+      computeCheckDigit(padOrTrim(line2Raw, 44).slice(0, 9)) === fixCheckDigitChar(line2Raw[9] ?? '');
+    if (docCheckMatches) {
+      for (let k = 28; k < Math.min(42, line2Raw.length); k++) {
+        prefixVariants.add(line2Raw.slice(0, k) + line2Raw.slice(k + 1));
+      }
+    }
+  }
+
+  // Recover dual insertions (one inside document number 0..9 + one before nationality/DOB 10..15),
+  // e.g. 'TADOOOODO<3IXXB8412254F1903278<<<<<<<<<<<<<<04'.
+  if (line2Raw.length >= 46 && line2Raw.length <= 47) {
+    const shifted2Sex = /[MFX<]/.test(line2Raw[22] ?? '');
+    const shifted2Expiry = /^\d{6}/.test(fixNumericField(line2Raw.slice(23, 29)));
+    const shifted2Nat =
+      line1Country.length >= 2 &&
+      fixAlphaField(line2Raw.slice(11, 16)).includes(line1Country.slice(0, 2));
+    if (shifted2Sex || shifted2Expiry || shifted2Nat) {
+      for (let k1 = 1; k1 < 10; k1++) {
+        const s1 = line2Raw.slice(0, k1) + line2Raw.slice(k1 + 1);
+        for (let k2 = 10; k2 <= 15 && k2 < s1.length; k2++) {
+          prefixVariants.add(s1.slice(0, k2) + s1.slice(k2 + 1));
+        }
+      }
+    }
+  }
+
   const candidateLines = new Set<string>();
   for (const pv of prefixVariants) {
     for (const v of buildTd3TailVariants(pv)) {
@@ -640,11 +750,11 @@ function parseTD3(line1Raw: string, line2Raw: string, isVisaA = false): MrzParse
   }
 
   let best = base;
-  let bestScore = scoreTd3Candidate(base);
+  let bestScore = scoreTd3Candidate(base, line1Country, line2Raw);
   for (const altLine2 of candidateLines) {
     if (altLine2 === line2Raw) continue;
     const cand = parseTD3Single(line1Raw, altLine2, false);
-    const candScore = scoreTd3Candidate(cand);
+    const candScore = scoreTd3Candidate(cand, line1Country, line2Raw);
     if (candScore > bestScore) {
       bestScore = candScore;
       best = cand;
@@ -661,14 +771,14 @@ function parseTD1(line1Raw: string, line2Raw: string, line3Raw: string): MrzPars
 
   const documentCode = fixAlphaField(line1.slice(0, 2)).replace(/</g, '');
   let issuingCountry = fixAlphaField(line1.slice(2, 5)).replace(/</g, '');
-  const documentNumberCheck = line1.slice(14, 15);
+  const documentNumberCheck = fixCheckDigitChar(line1.slice(14, 15));
   const documentNumberRaw = repairFieldWithCheckDigit(line1.slice(5, 14), documentNumberCheck);
   let optionalData1 = line1.slice(15, 30);
 
-  const dobCheck = line2.slice(6, 7);
+  const dobCheck = fixCheckDigitChar(line2.slice(6, 7));
   const dobRaw = repairDateFieldWithCheckDigit(line2.slice(0, 6), dobCheck);
   const sex = parseSex(line2.slice(7, 8));
-  const expiryCheck = line2.slice(14, 15);
+  const expiryCheck = fixCheckDigitChar(line2.slice(14, 15));
   const expiryRaw = repairDateFieldWithCheckDigit(line2.slice(8, 14), expiryCheck);
   const nationality = fixAlphaField(line2.slice(15, 18)).replace(/</g, '');
   issuingCountry = resolveSingleLetterIssuingCountry(issuingCountry, nationality);
@@ -677,12 +787,12 @@ function parseTD1(line1Raw: string, line2Raw: string, line3Raw: string): MrzPars
   }
 
   let optionalData2 = line2.slice(18, 29);
-  const compositeCheck = line2.slice(29, 30);
+  const compositeCheck = fixCheckDigitChar(line2.slice(29, 30));
 
   if (
-    computeCheckDigit(documentNumberRaw) === fixNumericField(documentNumberCheck) &&
-    computeCheckDigit(dobRaw) === fixNumericField(dobCheck) &&
-    computeCheckDigit(expiryRaw) === fixNumericField(expiryCheck)
+    computeCheckDigit(documentNumberRaw) === documentNumberCheck &&
+    computeCheckDigit(dobRaw) === dobCheck &&
+    computeCheckDigit(expiryRaw) === expiryCheck
   ) {
     optionalData1 = repairSliceForCompositeCheck(
       documentNumberRaw + documentNumberCheck,
@@ -757,7 +867,7 @@ function parseTD2(line1Raw: string, line2Raw: string, isVisaB = false): MrzParse
   let issuingCountry = fixAlphaField(line1.slice(2, 5)).replace(/</g, '');
   const { surname, surnames, givenNames, givenNamesList } = parseNames(line1.slice(5, 36));
 
-  const documentNumberCheck = line2.slice(9, 10);
+  const documentNumberCheck = fixCheckDigitChar(line2.slice(9, 10));
   const documentNumberRaw = repairFieldWithCheckDigit(line2.slice(0, 9), documentNumberCheck);
   const nationality = fixAlphaField(line2.slice(10, 13)).replace(/</g, '');
   issuingCountry = resolveSingleLetterIssuingCountry(issuingCountry, nationality);
@@ -765,19 +875,19 @@ function parseTD2(line1Raw: string, line2Raw: string, isVisaB = false): MrzParse
     issuingCountry = nationality;
   }
 
-  const dobCheck = line2.slice(19, 20);
+  const dobCheck = fixCheckDigitChar(line2.slice(19, 20));
   const dobRaw = repairDateFieldWithCheckDigit(line2.slice(13, 19), dobCheck);
   const sex = parseSex(line2.slice(20, 21));
-  const expiryCheck = line2.slice(27, 28);
+  const expiryCheck = fixCheckDigitChar(line2.slice(27, 28));
   const expiryRaw = repairDateFieldWithCheckDigit(line2.slice(21, 27), expiryCheck);
   let optionalData1 = isVisaB ? line2.slice(28, 36) : line2.slice(28, 35);
-  const compositeCheck = isVisaB ? '' : line2.slice(35, 36);
+  const compositeCheck = isVisaB ? '' : fixCheckDigitChar(line2.slice(35, 36));
 
   if (
     !isVisaB &&
-    computeCheckDigit(documentNumberRaw) === fixNumericField(documentNumberCheck) &&
-    computeCheckDigit(dobRaw) === fixNumericField(dobCheck) &&
-    computeCheckDigit(expiryRaw) === fixNumericField(expiryCheck)
+    computeCheckDigit(documentNumberRaw) === documentNumberCheck &&
+    computeCheckDigit(dobRaw) === dobCheck &&
+    computeCheckDigit(expiryRaw) === expiryCheck
   ) {
     optionalData1 = repairSliceForCompositeCheck(
       documentNumberRaw + documentNumberCheck + dobRaw + dobCheck + expiryRaw + expiryCheck,

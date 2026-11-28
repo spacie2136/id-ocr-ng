@@ -30,9 +30,11 @@ import {
 const UTOPIA_PATH = resolveRepoPath('public/assets/aistudio/87c86sbojo3e1_a5632450.png');
 const CROATIA_PATH = resolveRepoPath('public/assets/aistudio/Croatian_passport_data_page_09954fff.jpg');
 const SPAIN_PATH = resolveRepoPath('public/assets/aistudio/Spanish_passport_data_page_sample_eb3acb0d.jpg');
+const ROMANIA_PATH = resolveRepoPath('public/assets/aistudio/Romanian_passport_2024_model_datapage_a569bfe4.jpg');
+const BELGIUM_PATH = resolveRepoPath('public/assets/aistudio/Belgium_passport_biodata_d84a9042.jpg');
 
 describe('MRZ, VIZ, AAMVA & Specimen Parsing Regression Suite', () => {
-  it('parses TD3 passports accurately (Croatia, Spain, Utopia single-< format)', () => {
+  it('parses TD3 passports accurately (Croatia, Spain, Utopia single-< format, Romania, Belgium + insertion/check repair)', () => {
     const croatiaMrz = parseMrzFromText(
       [
         'P<HRVSPECIMEN<<SPECIMEN<<<<<<<<<<<<<<<<<<<<<',
@@ -64,6 +66,87 @@ describe('MRZ, VIZ, AAMVA & Specimen Parsing Regression Suite', () => {
     expect(utopiaMrz?.dateOfExpiry).toBe('2032-08-26');
     expect(utopiaMrz?.sex).toBe('F');
     expect(utopiaMrz?.allCheckDigitsValid).toBe(true);
+
+    // Romania 2024 exact TD3 with C.N.P. personal number
+    const romaniaExact = parseMrzFromText(
+      [
+        'PEROUPOPESCU<<MIHAELA<STEFANIA<<<<<<<<<<<<<<',
+        '0400210397ROU8001014F34090284800101017005<70',
+      ].join('\n')
+    );
+    expect(romaniaExact).not.toBeNull();
+    expect(romaniaExact?.documentCode).toBe('PE');
+    expect(romaniaExact?.issuingCountry).toBe('ROU');
+    expect(romaniaExact?.nationality).toBe('ROU');
+    expect(romaniaExact?.documentNumber).toBe('040021039');
+    expect(romaniaExact?.optionalData1).toBe('4800101017005');
+    expect(romaniaExact?.surname).toBe('POPESCU');
+    expect(romaniaExact?.givenNames).toBe('MIHAELA STEFANIA');
+    expect(romaniaExact?.dateOfBirth).toBe('1980-01-01');
+    expect(romaniaExact?.dateOfExpiry).toBe('2034-09-02');
+    expect(romaniaExact?.allCheckDigitsValid).toBe(true);
+
+    // Recovers stray OCR insertions inside nationality/DOB ('R0OUB' / 'R0U8B') and 'C'->'0' composite check digit
+    for (const noisyLine2 of [
+      '0400210397R0OUB001014F34090284800101017005<70',
+      '0400210397R0U8B001014F34090284800101017005<70',
+      '0400210397R0U8001014F34090284800101017005<7C',
+    ]) {
+      const recovered = parseMrzFromText(
+        ['PEROUPOPESCU<<MIHAELA<STEFANIA<<<<<<<<<<<<<<', noisyLine2].join('\n')
+      );
+      expect(recovered).not.toBeNull();
+      expect(recovered?.documentNumber).toBe('040021039');
+      expect(recovered?.nationality).toBe('ROU');
+      expect(recovered?.dateOfBirth).toBe('1980-01-01');
+      expect(recovered?.dateOfExpiry).toBe('2034-09-02');
+      expect(recovered?.optionalData1).toBe('4800101017005');
+      expect(recovered?.allCheckDigitsValid).toBe(true);
+    }
+
+    // Belgium exact TD3 + degraded OCR variants (alpha tie-break, dual insertion, corrupted check digit, chevron tail noise)
+    const belgiumExact = parseMrzFromText(
+      [
+        'P<BELSPECIMEN<<EMMA<<<<<<<<<<<<<<<<<<<<<<<<<',
+        'TA000000<3XXB8412254F1903278<<<<<<<<<<<<<<04',
+      ].join('\n')
+    );
+    expect(belgiumExact).not.toBeNull();
+    expect(belgiumExact?.issuingCountry).toBe('BEL');
+    expect(belgiumExact?.nationality).toBe('XXB');
+    expect(belgiumExact?.documentNumber).toBe('TA000000');
+    expect(belgiumExact?.surname).toBe('SPECIMEN');
+    expect(belgiumExact?.givenNames).toBe('EMMA');
+    expect(belgiumExact?.dateOfBirth).toBe('1984-12-25');
+    expect(belgiumExact?.dateOfExpiry).toBe('2019-03-27');
+    expect(belgiumExact?.sex).toBe('F');
+    expect(belgiumExact?.allCheckDigitsValid).toBe(true);
+
+    for (const [l1, l2] of [
+      [
+        'P<BELSPECIMEN<<EMMA<<<<<<<<<<<<<<<<<<<<<<<<<',
+        'TAD00O000<3XXB8412254F1903278<<<<<<<<<<<<<<04',
+      ],
+      [
+        'P<BELSPECIMEN<<EMMA<L<LKLLLLLLLCLLLLLLLLL',
+        'TADOOOODO<3IXXB8412254F1903278<<<<<<<<<<<<<<04',
+      ],
+      [
+        'P<BELSPECIMEN<<EMMA<<<<<<<<<<<<<<<<<<<<<<<<<',
+        'TADOOOOO<IXXBBA12254F1903278<<<<<<<<<<<<<<D4',
+      ],
+    ]) {
+      const recovered = parseMrzFromText([l1, l2].join('\n'));
+      expect(recovered).not.toBeNull();
+      expect(recovered?.documentNumber).toBe('TA000000');
+      expect(recovered?.issuingCountry).toBe('BEL');
+      expect(recovered?.nationality).toBe('XXB');
+      expect(recovered?.surname).toBe('SPECIMEN');
+      expect(recovered?.givenNames).toBe('EMMA');
+      expect(recovered?.dateOfBirth).toBe('1984-12-25');
+      expect(recovered?.dateOfExpiry).toBe('2019-03-27');
+      expect(recovered?.allCheckDigitsValid).toBe(true);
+    }
   });
 
   it('repairs Utopia single-< boundary cleanly with matchUnsplitMrzNameWithViz / crossValidateMrzAndViz', () => {
@@ -336,17 +419,22 @@ describe('Pixel Geometry, Shadow Flattening, Portrait/Signature & Perspective Su
   });
 
   it('localizes MRZ bands & flattens directional shadow illumination on real passports', () => {
-    for (const imgPath of [UTOPIA_PATH, CROATIA_PATH, SPAIN_PATH]) {
+    for (const imgPath of [UTOPIA_PATH, CROATIA_PATH, SPAIN_PATH, ROMANIA_PATH, BELGIUM_PATH]) {
       const { width, height, data } = loadImageRgbaFromFile(imgPath);
       const gray = new Uint8ClampedArray(width * height);
       for (let i = 0, p = 0; i < data.length; i += 4, p++) {
-        gray[p] = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
+        const r = data[i];
+        const g = data[i + 1];
+        const b = data[i + 2];
+        const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+        const chroma = Math.max(r, g, b) - Math.min(r, g, b);
+        gray[p] = Math.min(255, Math.round(lum + 0.68 * chroma));
       }
 
       const band = detectDynamicMrzBand(gray, width, height);
-      expect(band.detected).toBe(true);
-      expect(band.tightTop).toBeGreaterThanOrEqual(0.58);
-      expect(band.tightBottom).toBeLessThanOrEqual(0.995);
+      expect(band.detected, imgPath).toBe(true);
+      expect(band.tightTop, imgPath).toBeGreaterThanOrEqual(imgPath === BELGIUM_PATH ? 0.74 : 0.58);
+      expect(band.tightBottom, imgPath).toBeLessThanOrEqual(0.995);
     }
 
     const variants = generateImageVariants(CROATIA_PATH, tmpDir, 'hrv-shadow');

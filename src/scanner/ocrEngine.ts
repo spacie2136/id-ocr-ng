@@ -388,7 +388,7 @@ function reconcileDocumentNumber(
     const vizNorm = vizDocNum.trim().toUpperCase();
     if (
       docCheck &&
-      !docCheck.valid &&
+      (!docCheck.valid || !mrz.allCheckDigitsValid) &&
       mrzNorm.length === vizNorm.length &&
       normalizeConfusableChars(mrzNorm) === normalizeConfusableChars(vizNorm)
     ) {
@@ -607,24 +607,142 @@ function findInkHorizontalBounds(
   x0: number,
   y0: number,
   x1: number,
-  y1: number
+  y1: number,
+  syms: TessSymbol[] = [],
+  glyphW = 30,
+  targetCols = 44
 ): { inkX0: number; inkX1: number } {
   const bx0 = Math.max(0, Math.floor(x0));
   const bx1 = Math.min(gray.width - 1, Math.ceil(x1));
   const by0 = Math.max(0, Math.floor(y0));
   const by1 = Math.min(gray.height - 1, Math.ceil(y1));
+  const lineH = Math.max(12, by1 - by0 + 1);
+
+  const realSyms = syms
+    .filter((s) => {
+      const sw = s.bbox.x1 - s.bbox.x0;
+      const sh = s.bbox.y1 - s.bbox.y0;
+      return sw >= Math.max(4, glyphW * 0.25) && sh >= Math.max(8, lineH * 0.42);
+    })
+    .sort((a, b) => a.bbox.x0 - b.bbox.x0);
+
+  let coreY0 = Math.min(by1, by0 + Math.round(lineH * 0.14));
+  let coreY1 = Math.max(coreY0 + 1, by1 - Math.round(lineH * 0.14));
+  if (realSyms.length >= 4) {
+    const symY0s = realSyms.map((s) => s.bbox.y0).sort((a, b) => a - b);
+    const symY1s = realSyms.map((s) => s.bbox.y1).sort((a, b) => a - b);
+    const medY0 = symY0s[Math.floor(symY0s.length / 2)];
+    const medY1 = symY1s[Math.floor(symY1s.length / 2)];
+    if (medY1 - medY0 >= 8) {
+      coreY0 = Math.max(by0, Math.floor(medY0 + 1));
+      coreY1 = Math.min(by1, Math.ceil(medY1 - 1));
+    }
+  }
+
+  const coreH = Math.max(6, coreY1 - coreY0 + 1);
+  const minColDark = Math.max(3, Math.round(coreH * 0.16));
+
+  const isInkCol = (x: number): boolean => {
+    let darkCount = 0;
+    for (let y = coreY0; y <= coreY1; y++) {
+      if (gray.data[y * gray.width + x] < 155) {
+        darkCount++;
+        if (darkCount >= minColDark) return true;
+      }
+    }
+    return false;
+  };
+
+  const hasWideBlankGapInGray = (gapStart: number, gapEnd: number, minBlankCols: number): boolean => {
+    const start = Math.max(bx0, Math.ceil(gapStart));
+    const end = Math.min(bx1, Math.floor(gapEnd));
+    if (end - start + 1 < minBlankCols) return false;
+    let run = 0;
+    for (let x = start; x <= end; x++) {
+      if (!isInkCol(x)) {
+        run++;
+        if (run >= minBlankCols) return true;
+      } else {
+        run = 0;
+      }
+    }
+    return false;
+  };
+
+  // Trim detached outer noise symbols that sit behind a genuine empty paper gap in grayscale
+  // (trailing `06` after `<<<` keeps its link because `<<<` chevrons have dark ink in grayscale)
+  const detachedBlankLimit = Math.max(18, Math.round(glyphW * 1.65));
+  while (
+    realSyms.length >= 4 &&
+    realSyms[1].bbox.x0 - realSyms[0].bbox.x1 > glyphW * 1.8 &&
+    hasWideBlankGapInGray(realSyms[0].bbox.x1 + 2, realSyms[1].bbox.x0 - 2, detachedBlankLimit)
+  ) {
+    realSyms.shift();
+  }
+  while (
+    realSyms.length >= 4 &&
+    realSyms[realSyms.length - 1].bbox.x0 - realSyms[realSyms.length - 2].bbox.x1 > glyphW * 1.8 &&
+    hasWideBlankGapInGray(
+      realSyms[realSyms.length - 2].bbox.x1 + 2,
+      realSyms[realSyms.length - 1].bbox.x0 - 2,
+      detachedBlankLimit
+    )
+  ) {
+    realSyms.pop();
+  }
+
+  if (realSyms.length >= 2) {
+    const anchorX0 = Math.max(bx0, Math.floor(realSyms[0].bbox.x0));
+    const anchorX1 = Math.min(bx1, Math.ceil(realSyms[realSyms.length - 1].bbox.x1));
+    const maxOutwardGap = Math.max(22, Math.round(glyphW * 2.1));
+    const minRunWidth = Math.max(3, Math.round(glyphW * 0.16));
+
+    let inkX0 = anchorX0;
+    let blankRunLeft = 0;
+    let runCountLeft = 0;
+    for (let x = anchorX0; x >= bx0; x--) {
+      if (isInkCol(x)) {
+        blankRunLeft = 0;
+        runCountLeft++;
+        if (runCountLeft >= minRunWidth || inkX0 - x <= Math.round(glyphW * 0.55)) {
+          inkX0 = Math.min(inkX0, x);
+        }
+      } else {
+        blankRunLeft++;
+        runCountLeft = 0;
+        if (blankRunLeft > maxOutwardGap) break;
+      }
+    }
+
+    let inkX1 = anchorX1;
+    let blankRunRight = 0;
+    let runCountRight = 0;
+    for (let x = anchorX1; x <= bx1; x++) {
+      if (isInkCol(x)) {
+        blankRunRight = 0;
+        runCountRight++;
+        if (runCountRight >= minRunWidth || x - inkX1 <= Math.round(glyphW * 0.55)) {
+          inkX1 = Math.max(inkX1, x);
+        }
+      } else {
+        blankRunRight++;
+        runCountRight = 0;
+        if (blankRunRight > maxOutwardGap) break;
+      }
+    }
+
+    if (inkX1 > inkX0 && inkX1 - inkX0 <= glyphW * targetCols * 1.55) {
+      return { inkX0, inkX1 };
+    }
+    if (anchorX1 > anchorX0) {
+      return { inkX0: anchorX0, inkX1: anchorX1 };
+    }
+  }
 
   let inkX0 = bx1;
   let inkX1 = bx0;
   for (let x = bx0; x <= bx1; x++) {
-    let darkCount = 0;
-    for (let y = by0; y <= by1; y++) {
-      if (gray.data[y * gray.width + x] < 165) {
-        darkCount++;
-        if (darkCount >= 2) break;
-      }
-    }
-    if (darkCount >= 2) {
+    if (isInkCol(x)) {
       if (x < inkX0) inkX0 = x;
       if (x > inkX1) inkX1 = x;
     }
@@ -779,7 +897,10 @@ function reconstructMrzCandidatesFromBlocks(
           line.bbox.x0,
           line.bbox.y0,
           line.bbox.x1,
-          line.bbox.y1
+          line.bbox.y1,
+          line.syms,
+          glyphW,
+          targetCols
         );
 
         const center0 = inkX0 + glyphW / 2;
@@ -922,12 +1043,15 @@ function scoreOrientationPass(
   if (mrz) {
     score += mrz.validCount * 120;
     if (mrz.allCheckDigitsValid) score += 200;
-    if (/^[PVIAC]/.test(mrz.documentCode)) score += 60;
-    if (mrz.dateOfBirth) score += 35;
-    if (mrz.dateOfExpiry) score += 35;
-    if (mrz.surname) score += 30;
-    if (mrz.givenNames) score += 25;
-    if (mrz.documentNumber) score += 25;
+    // Only award field bonuses when at least one check digit or both dates confirm genuine MRZ structure
+    if (mrz.validCount > 0 || (mrz.dateOfBirth && mrz.dateOfExpiry)) {
+      if (/^[PVIAC]/.test(mrz.documentCode)) score += 60;
+      if (mrz.dateOfBirth) score += 35;
+      if (mrz.dateOfExpiry) score += 35;
+      if (mrz.surname) score += 30;
+      if (mrz.givenNames) score += 25;
+      if (mrz.documentNumber) score += 25;
+    }
   }
   const vizFields = countPopulatedVizFields(viz);
   score += vizFields * 28;
@@ -1622,8 +1746,32 @@ export class DocumentScanner {
     const runMrzOcr = async () => {
       const mrzCandidates: MrzParsedData[] = [];
       let mrzRawText = '';
+      let bestMrzTextScore = -1;
+      let bestMrzTextPriority = -1;
       let mrzConfSum = 0;
       let mrzConfCount = 0;
+
+      const considerMrzRawText = (
+        text: string,
+        parsed: MrzParsedData | null,
+        priority: number
+      ) => {
+        const trimmed = text.trim();
+        if (!trimmed) return;
+        if (parsed) {
+          const score = scoreMrzCandidate(parsed);
+          if (
+            score > bestMrzTextScore ||
+            (score === bestMrzTextScore && priority > bestMrzTextPriority)
+          ) {
+            bestMrzTextScore = score;
+            bestMrzTextPriority = priority;
+            mrzRawText = trimmed;
+          }
+        } else if (!mrzRawText) {
+          mrzRawText = trimmed;
+        }
+      };
 
       if (!enhanceMrzPass || !activeMrzWorker) {
         return { mrzCandidates, mrzRawText, mrzConfidence: 0 };
@@ -1649,7 +1797,6 @@ export class DocumentScanner {
           () => this.abortInFlightWorkers()
         );
         const rawTxt = (mrzResult.data.text || '').trim();
-        if (rawTxt && !mrzRawText) mrzRawText = rawTxt;
         if (typeof mrzResult.data.confidence === 'number' && mrzResult.data.confidence > 0) {
           mrzConfSum += mrzResult.data.confidence;
           mrzConfCount++;
@@ -1657,6 +1804,7 @@ export class DocumentScanner {
 
         const rawParsed = parseMrzFromText(rawTxt);
         if (rawParsed) mrzCandidates.push(rawParsed);
+        considerMrzRawText(rawTxt, rawParsed, 3);
 
         const reconstructed = reconstructMrzCandidatesFromBlocks(
           mrzResult.data.blocks,
@@ -1666,14 +1814,13 @@ export class DocumentScanner {
         if (reconstructed.symbolRepairedText) {
           const symParsed = parseMrzFromText(reconstructed.symbolRepairedText);
           if (symParsed) mrzCandidates.push(symParsed);
+          considerMrzRawText(reconstructed.symbolRepairedText, symParsed, 2);
         }
 
         if (reconstructed.gridRepairedText) {
           const gridParsed = parseMrzFromText(reconstructed.gridRepairedText);
-          if (gridParsed) {
-            mrzCandidates.push(gridParsed);
-            mrzRawText = reconstructed.gridRepairedText;
-          }
+          if (gridParsed) mrzCandidates.push(gridParsed);
+          considerMrzRawText(reconstructed.gridRepairedText, gridParsed, 1);
         }
       };
 
@@ -1808,6 +1955,40 @@ export class DocumentScanner {
   ): Promise<{ score: number; earlyExit: boolean; viaWorker: boolean }> {
     throwIfScanAborted(signal);
 
+    const probeMrzStrip = async (worker: Worker, input: Blob | string, gray: GrayscaleBuffer) => {
+      await raceWithAbort(
+        worker.setParameters({
+          tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
+          tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<',
+        }),
+        signal,
+        () => this.abortInFlightWorkers()
+      );
+      const res = await raceWithAbort(
+        worker.recognize(input, {}, { blocks: true }),
+        signal,
+        () => this.abortInFlightWorkers()
+      );
+      const rawTxt = (res.data.text || '').trim();
+      const found: MrzParsedData[] = [];
+      const p1 = parseMrzFromText(rawTxt);
+      if (p1) found.push(p1);
+      const recon = reconstructMrzCandidatesFromBlocks(res.data.blocks, gray);
+      if (recon.symbolRepairedText) {
+        const p2 = parseMrzFromText(recon.symbolRepairedText);
+        if (p2) found.push(p2);
+      }
+      if (recon.gridRepairedText) {
+        const p3 = parseMrzFromText(recon.gridRepairedText);
+        if (p3) found.push(p3);
+      }
+      found.sort((a, b) => scoreMrzCandidate(b) - scoreMrzCandidate(a));
+      return {
+        mrz: found[0] ?? null,
+        conf: res.data.confidence || 0,
+      };
+    };
+
     if (mrzStripOnlyMode && mrzWorker) {
       const { preprocessed, viaWorker } = await this.preprocessWithWorkerOrFallback(
         surface,
@@ -1824,52 +2005,17 @@ export class DocumentScanner {
         signal
       );
 
-      await raceWithAbort(
-        mrzWorker.setParameters({
-          tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
-          tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<',
-        }),
-        signal,
-        () => this.abortInFlightWorkers()
-      );
-
-      const probeStrip = async (input: Blob | string, gray: GrayscaleBuffer) => {
-        const res = await raceWithAbort(
-          mrzWorker.recognize(input, {}, { blocks: true }),
-          signal,
-          () => this.abortInFlightWorkers()
-        );
-        const rawTxt = (res.data.text || '').trim();
-        const found: MrzParsedData[] = [];
-        const p1 = parseMrzFromText(rawTxt);
-        if (p1) found.push(p1);
-        const recon = reconstructMrzCandidatesFromBlocks(res.data.blocks, gray);
-        if (recon.symbolRepairedText) {
-          const p2 = parseMrzFromText(recon.symbolRepairedText);
-          if (p2) found.push(p2);
-        }
-        if (recon.gridRepairedText) {
-          const p3 = parseMrzFromText(recon.gridRepairedText);
-          if (p3) found.push(p3);
-        }
-        found.sort((a, b) => scoreMrzCandidate(b) - scoreMrzCandidate(a));
-        return {
-          mrz: found[0] ?? null,
-          conf: res.data.confidence || 0,
-        };
-      };
-
       const tightInput = await resolveTesseractInput(
         preprocessed.mrzTightCropBlob,
         preprocessed.mrzTightCropDataUrl
       );
-      let bestProbe = await probeStrip(tightInput, preprocessed.mrzTightGrayscale);
+      let bestProbe = await probeMrzStrip(mrzWorker, tightInput, preprocessed.mrzTightGrayscale);
       if (!bestProbe.mrz || !bestProbe.mrz.allCheckDigitsValid) {
         const broadInput = await resolveTesseractInput(
           preprocessed.mrzCropBlob,
           preprocessed.mrzCropDataUrl
         );
-        const broadProbe = await probeStrip(broadInput, preprocessed.mrzGrayscale);
+        const broadProbe = await probeMrzStrip(mrzWorker, broadInput, preprocessed.mrzGrayscale);
         if (
           broadProbe.mrz &&
           (!bestProbe.mrz ||
@@ -1899,7 +2045,7 @@ export class DocumentScanner {
         deskewDegrees,
         includePreviews: false,
         skipFullPage: false,
-        skipMrzStrips: true,
+        skipMrzStrips: !mrzWorker,
         needOriginal: !preprocess,
       },
       useWorkerPreprocess,
@@ -1929,7 +2075,23 @@ export class DocumentScanner {
     const boxes = extractVizLineBoxes(res.data.blocks);
     const cleaned = boxes.length > 0 ? boxes.map((b) => b.text).join('\n') : rawText;
     const viz = parseVizText(cleaned, boxes);
-    const mrz = parseMrzFromText(rawText);
+    let mrz = parseMrzFromText(rawText);
+
+    if ((!mrz || !mrz.allCheckDigitsValid) && mrzWorker) {
+      const tightInput = await resolveTesseractInput(
+        preprocessed.mrzTightCropBlob,
+        preprocessed.mrzTightCropDataUrl
+      );
+      const tightProbe = await probeMrzStrip(
+        mrzWorker,
+        tightInput,
+        preprocessed.mrzTightGrayscale
+      );
+      if (tightProbe.mrz && (!mrz || scoreMrzCandidate(tightProbe.mrz) > scoreMrzCandidate(mrz))) {
+        mrz = tightProbe.mrz;
+      }
+    }
+
     const score = scoreOrientationPass(mrz, viz, conf, cleaned);
 
     return {
@@ -2258,15 +2420,14 @@ export class DocumentScanner {
         let bestProbeRot = bestPass.coarse;
         let bestProbeScore = bestPass.probeScore;
 
-        const mrzProbeWorker =
-          skipViz && effectiveEnhanceMrz
-            ? (prewarmedMrzWorker?.worker ?? this.mrzWorker ?? activeVizWorker)
-            : null;
         const vizProbeWorker =
           !skipViz
             ? (activeVizWorker ??
               (await this.ensureWorker(vizStrategy.primaryLanguage, workerConfig, onProgress, signal)))
             : null;
+        const mrzProbeWorker = effectiveEnhanceMrz
+          ? (prewarmedMrzWorker?.worker ?? this.mrzWorker ?? vizProbeWorker ?? activeVizWorker)
+          : null;
 
         for (let idx = 1; idx < candidateOrder.length; idx++) {
           throwIfScanAborted(signal);
